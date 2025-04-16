@@ -1,15 +1,14 @@
 ### 1. Initialize virtual env 
-- Use virtual env shell 
-```sh
-pipenv shell
-```
-
 - Install dependencies(required only once)
 ```sh
 pipenv install
 ```
 
 ### 2. Run Ryu application
+- Use virtual env shell 
+```sh
+pipenv shell
+```
 - To run an ryu application, the ryu-manager command is used. 
 ```sh
 ryu-manager ./controller/ryu_stp_controller.py ryu.app.rest_topology ryu.app.ofctl_rest --wsapi-host=127.0.0.1 --wsapi-port=8080 --observe-links --ofp-tcp-listen-port 10001
