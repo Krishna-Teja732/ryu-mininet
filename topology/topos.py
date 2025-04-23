@@ -87,8 +87,13 @@ class TreeTopo(Topo):
 
 
 class GraphTopo(Topo):
+    """
+    Connected graph with N switches, N hosts and 3 * N links.
+    Each host is connected to 1 switch.
+    """
+
     def build(self):
-        number_of_nodes = 15
+        number_of_nodes = 30
         switches = []
         hosts = []
 
