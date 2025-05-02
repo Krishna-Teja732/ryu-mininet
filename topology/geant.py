@@ -172,4 +172,4 @@ class GeantMplsTopo(Topo):
         self.addLink(TLN, HEL)
 
 
-topos = {"geantTopo": (lambda: GeantMplsTopo())}
+topos = {"GeantTopo": (lambda: GeantMplsTopo())}

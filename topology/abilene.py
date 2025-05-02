@@ -67,4 +67,4 @@ class AbileneTopo(Topo):
         self.addLink(Atlanta, Indianapolis, bw=1, delay="0.544962634977ms")
 
 
-topos = {"abileneTopo": (lambda: AbileneTopo())}
+topos = {"AbileneTopo": (lambda: AbileneTopo())}

@@ -12,8 +12,8 @@ class LinearTopo(Topo):
         h1 = self.addHost("h1")
         h2 = self.addHost("h2")
 
-        self.addLink(s1, s2, cls=TCLink, delay="100ms", loss=5)
         self.addLink(s1, h1, cls=TCLink, delay="10ms", loss=0)
+        self.addLink(s1, s2, cls=TCLink, delay="100ms", loss=0)
         self.addLink(s2, h2, cls=TCLink, delay="20ms", loss=0)
 
 
