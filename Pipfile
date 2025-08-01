@@ -4,11 +4,15 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+# Ryu works for pip, setuptools and eventlet versions listed below. Changing versions of these packages might break ryu
 pip = "20.3.4"
 setuptools = "67.6.1"
 eventlet = "0.30.2"
+
+# Packages 
 ryu = "*"
 mininet = "*"
+requests = "*"
 
 [dev-packages]
 

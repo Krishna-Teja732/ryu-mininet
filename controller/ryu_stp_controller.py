@@ -14,27 +14,50 @@
 # limitations under the License.
 # Modified from source: https://github.com/faucetsdn/ryu/blob/master/ryu/app/simple_switch_stp_13.py
 
-from ryu.base import app_manager
+from ryu.base.app_manager import RyuApp
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from ryu.lib import dpid as dpid_lib
 from ryu.lib import stplib
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
-from ryu.app import simple_switch_13
 from ryu.lib.packet import ether_types
 
 
-class SimpleSwitch13(simple_switch_13.SimpleSwitch13):
+class STPControllerOPFV_1_3(RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
     _CONTEXTS = {"stplib": stplib.Stp}
 
     def __init__(self, *args, **kwargs):
-        super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        super(STPControllerOPFV_1_3, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
         self.stp = kwargs["stplib"]
+
+    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        if buffer_id:
+            mod = parser.OFPFlowMod(
+                datapath=datapath,
+                buffer_id=buffer_id,
+                priority=priority,
+                match=match,
+                instructions=inst,
+                flags=ofproto_v1_3.OFPFF_SEND_FLOW_REM,
+            )
+        else:
+            mod = parser.OFPFlowMod(
+                datapath=datapath,
+                priority=priority,
+                match=match,
+                instructions=inst,
+                flags=ofproto_v1_3.OFPFF_SEND_FLOW_REM,
+            )
+        datapath.send_msg(mod)
 
     def delete_flow(self, datapath):
         ofproto = datapath.ofproto
@@ -51,6 +74,54 @@ class SimpleSwitch13(simple_switch_13.SimpleSwitch13):
                 match=match,
             )
             datapath.send_msg(mod)
+
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        datapath = ev.msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        match = parser.OFPMatch()
+        actions = [
+            parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)
+        ]
+        self.add_flow(datapath, 0, match, actions)
+
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def flow_removed_handler(self, ev):
+        msg = ev.msg
+        dp = msg.datapath
+        ofp = dp.ofproto
+
+        if msg.reason == ofp.OFPRR_IDLE_TIMEOUT:
+            reason = "IDLE TIMEOUT"
+        elif msg.reason == ofp.OFPRR_HARD_TIMEOUT:
+            reason = "HARD TIMEOUT"
+        elif msg.reason == ofp.OFPRR_DELETE:
+            reason = "DELETE"
+        elif msg.reason == ofp.OFPRR_GROUP_DELETE:
+            reason = "GROUP DELETE"
+        else:
+            reason = "unknown"
+
+        self.logger.debug(
+            "OFPFlowRemoved received: "
+            "cookie=%d priority=%d reason=%s table_id=%d "
+            "duration_sec=%d duration_nsec=%d "
+            "idle_timeout=%d hard_timeout=%d "
+            "packet_count=%d byte_count=%d match.fields=%s",
+            msg.cookie,
+            msg.priority,
+            msg.reason,
+            msg.table_id,
+            msg.duration_sec,
+            msg.duration_nsec,
+            msg.idle_timeout,
+            msg.hard_timeout,
+            msg.packet_count,
+            msg.byte_count,
+            msg.match,
+        )
 
     @set_ev_cls(stplib.EventPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -72,8 +143,6 @@ class SimpleSwitch13(simple_switch_13.SimpleSwitch13):
 
         dpid = datapath.id
         self.mac_to_port.setdefault(dpid, {})
-
-        self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
