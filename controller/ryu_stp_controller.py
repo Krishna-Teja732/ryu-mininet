@@ -18,12 +18,15 @@ from ryu.base.app_manager import RyuApp
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
+from ryu.controller.controller import Datapath
 from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from ryu.lib import dpid as dpid_lib
 from ryu.lib import stplib
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
+from ryu.topology import event as topology_events
+from ryu.topology.switches import Switch, Link, Host
 
 
 class STPControllerOPFV_1_3(RyuApp):
@@ -90,8 +93,8 @@ class STPControllerOPFV_1_3(RyuApp):
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removed_handler(self, ev):
         msg = ev.msg
-        dp = msg.datapath
-        ofp = dp.ofproto
+        datapath = msg.datapath
+        ofp = datapath.ofproto
 
         if msg.reason == ofp.OFPRR_IDLE_TIMEOUT:
             reason = "IDLE TIMEOUT"
@@ -112,7 +115,7 @@ class STPControllerOPFV_1_3(RyuApp):
             "packet_count=%d byte_count=%d match.fields=%s",
             msg.cookie,
             msg.priority,
-            msg.reason,
+            reason,
             msg.table_id,
             msg.duration_sec,
             msg.duration_nsec,
@@ -174,14 +177,14 @@ class STPControllerOPFV_1_3(RyuApp):
 
     @set_ev_cls(stplib.EventTopologyChange, MAIN_DISPATCHER)
     def _topology_change_handler(self, ev):
-        dp = ev.dp
-        dpid_str = dpid_lib.dpid_to_str(dp.id)
+        datapath: Datapath = ev.dp
+        dpid_str = dpid_lib.dpid_to_str(datapath.id)
         msg = "Receive topology change event. Flush MAC table."
         self.logger.debug("[dpid=%s] %s", dpid_str, msg)
 
-        if dp.id in self.mac_to_port:
-            self.delete_flow(dp)
-            del self.mac_to_port[dp.id]
+        if datapath.id in self.mac_to_port:
+            self.delete_flow(datapath)
+            del self.mac_to_port[datapath.id]
 
     @set_ev_cls(stplib.EventPortStateChange, MAIN_DISPATCHER)
     def _port_state_change_handler(self, ev):
@@ -196,3 +199,33 @@ class STPControllerOPFV_1_3(RyuApp):
         self.logger.debug(
             "[dpid=%s][port=%d] state=%s", dpid_str, ev.port_no, of_state[ev.port_state]
         )
+
+    @set_ev_cls(topology_events.EventSwitchEnter, MAIN_DISPATCHER)
+    def _switch_enter_handler(self, ev):
+        datapath: Switch = ev.switch
+        self.logger.info(f"Switch Enter:  {datapath}")
+
+    @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
+    def _switch_leave_handler(self, ev):
+        datapath: Switch = ev.switch
+        self.logger.info(f"Switch Leave:  {datapath}")
+
+    @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
+    def _host_add_handler(self, ev):
+        host: Host = ev.host
+        self.logger.info(f"Host Add: {host}")
+
+    @set_ev_cls(topology_events.EventHostMove, MAIN_DISPATCHER)
+    def _host_move_handler(self, ev):
+        host: Host = ev.host
+        self.logger.info(f"Host Move: {host}")
+
+    @set_ev_cls(topology_events.EventLinkAdd, MAIN_DISPATCHER)
+    def _link_add_handler(self, ev):
+        link: Link = ev.link
+        self.logger.info(f"Link Add: {link}")
+
+    @set_ev_cls(topology_events.EventLinkDelete, MAIN_DISPATCHER)
+    def _link_delete_handler(self, ev):
+        link: Link = ev.link
+        self.logger.info(f"Link delete: {link}")
