@@ -27,6 +27,30 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.topology import event as topology_events
 from ryu.topology.switches import Switch, Link, Host
+import aiohttp
+import asyncio
+
+KG_UPDATE_URL_BASE = "http://localhost:8080/ryu/openflow13"
+
+
+async def send_switch_create_event(dpid):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{KG_UPDATE_URL_BASE}/{dpid}"):
+            pass
+
+
+async def send_switch_leave_event(dpid):
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(f"{KG_UPDATE_URL_BASE}/{dpid}"):
+            pass
+
+
+async def send_flow_add_event(dpid, table_id, request_body):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{KG_UPDATE_URL_BASE}/{dpid}/{table_id}/flowrule", json=request_body
+        ):
+            pass
 
 
 class STPControllerOFPV_1_3(RyuApp):
@@ -44,7 +68,7 @@ class STPControllerOFPV_1_3(RyuApp):
 
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         if buffer_id:
-            mod = parser.OFPFlowMod(
+            mod: ofproto_v1_3_parser.OFPFlowMod = parser.OFPFlowMod(
                 datapath=datapath,
                 buffer_id=buffer_id,
                 priority=priority,
@@ -53,17 +77,34 @@ class STPControllerOFPV_1_3(RyuApp):
                 flags=ofproto_v1_3.OFPFF_SEND_FLOW_REM,
             )
         else:
-            mod = parser.OFPFlowMod(
+            mod: ofproto_v1_3_parser.OFPFlowMod = parser.OFPFlowMod(
                 datapath=datapath,
                 priority=priority,
                 match=match,
                 instructions=inst,
                 flags=ofproto_v1_3.OFPFF_SEND_FLOW_REM,
             )
-        # print(mod.match.to_jsondict()["OFPMatch"]["oxm_fields"])
-        print(mod.to_jsondict())
-        # print(mod.instructions)
-        # print(mod.instructions[0].to_jsondict())
+
+        formatted_match = dict()
+        for _, match_headers in mod.match.stringify_attrs():
+            formatted_match.update(match_headers)
+
+        formatted_inst = list()
+        for instruction in mod.instructions:
+            formatted_inst.append(instruction.to_jsondict())
+
+        asyncio.run(
+            send_flow_add_event(
+                datapath.id,
+                mod.table_id,
+                {
+                    "priority": mod.priority,
+                    "oxm_fields": formatted_match,
+                    "instructions": formatted_inst,
+                },
+            )
+        )
+
         datapath.send_msg(mod)
 
     def delete_flow(self, datapath):
@@ -206,8 +247,8 @@ class STPControllerOFPV_1_3(RyuApp):
 
     @set_ev_cls(topology_events.EventSwitchEnter, MAIN_DISPATCHER)
     def _switch_enter_handler(self, ev):
-        datapath: Switch = ev.switch
-        self.logger.info(f"Switch Enter:  {datapath}")
+        datapath = ev.switch.dp
+        asyncio.run(send_switch_create_event(datapath.id))
 
     @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
     def _switch_leave_handler(self, ev):
