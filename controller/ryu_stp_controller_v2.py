@@ -33,21 +33,33 @@ import asyncio
 KG_UPDATE_URL_BASE = "http://localhost:8080/ryu/openflow13"
 
 
-async def send_switch_create_event(dpid):
+async def send_switch_enter_event(dpid):
+    print(f"Switch Enter: {dpid}")
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{KG_UPDATE_URL_BASE}/{dpid}"):
             pass
 
 
 async def send_switch_leave_event(dpid):
+    print(f"Switch Leave: {dpid}")
     async with aiohttp.ClientSession() as session:
         async with session.delete(f"{KG_UPDATE_URL_BASE}/{dpid}"):
             pass
 
 
 async def send_flow_add_event(dpid, table_id, request_body):
+    print(f"Flow Add: {dpid}/{table_id} flowRule: {request_body}")
     async with aiohttp.ClientSession() as session:
         async with session.post(
+            f"{KG_UPDATE_URL_BASE}/{dpid}/{table_id}/flowrule", json=request_body
+        ):
+            pass
+
+
+async def send_flow_remove_event(dpid, table_id, request_body):
+    print(f"Flow remove: {dpid}/{table_id} flowRule: {request_body}")
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(
             f"{KG_UPDATE_URL_BASE}/{dpid}/{table_id}/flowrule", json=request_body
         ):
             pass
@@ -141,34 +153,19 @@ class STPControllerOFPV_1_3(RyuApp):
         datapath = msg.datapath
         ofp = datapath.ofproto
 
-        if msg.reason == ofp.OFPRR_IDLE_TIMEOUT:
-            reason = "IDLE TIMEOUT"
-        elif msg.reason == ofp.OFPRR_HARD_TIMEOUT:
-            reason = "HARD TIMEOUT"
-        elif msg.reason == ofp.OFPRR_DELETE:
-            reason = "DELETE"
-        elif msg.reason == ofp.OFPRR_GROUP_DELETE:
-            reason = "GROUP DELETE"
-        else:
-            reason = "unknown"
+        formatted_match = dict()
+        for _, match_headers in msg.match.stringify_attrs():
+            formatted_match.update(match_headers)
 
-        self.logger.debug(
-            "OFPFlowRemoved received: "
-            "cookie=%d priority=%d reason=%s table_id=%d "
-            "duration_sec=%d duration_nsec=%d "
-            "idle_timeout=%d hard_timeout=%d "
-            "packet_count=%d byte_count=%d match.fields=%s",
-            msg.cookie,
-            msg.priority,
-            reason,
-            msg.table_id,
-            msg.duration_sec,
-            msg.duration_nsec,
-            msg.idle_timeout,
-            msg.hard_timeout,
-            msg.packet_count,
-            msg.byte_count,
-            msg.match,
+        asyncio.run(
+            send_flow_remove_event(
+                datapath.id,
+                msg.table_id,
+                {
+                    "priority": msg.priority,
+                    "oxm_fields": formatted_match,
+                },
+            )
         )
 
     @set_ev_cls(stplib.EventPacketIn, MAIN_DISPATCHER)
@@ -248,12 +245,12 @@ class STPControllerOFPV_1_3(RyuApp):
     @set_ev_cls(topology_events.EventSwitchEnter, MAIN_DISPATCHER)
     def _switch_enter_handler(self, ev):
         datapath = ev.switch.dp
-        asyncio.run(send_switch_create_event(datapath.id))
+        asyncio.run(send_switch_enter_event(datapath.id))
 
     @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
     def _switch_leave_handler(self, ev):
-        datapath: Switch = ev.switch
-        self.logger.info(f"Switch Leave:  {datapath}")
+        datapath = ev.switch.dp
+        asyncio.run(send_switch_leave_event(datapath.id))
 
     @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
     def _host_add_handler(self, ev):
