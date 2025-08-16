@@ -141,6 +141,8 @@ class STPControllerOFPV_1_3(RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
+        asyncio.run(send_switch_enter_event(datapath.id))
+
         match = parser.OFPMatch()
         actions = [
             parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)
@@ -242,10 +244,11 @@ class STPControllerOFPV_1_3(RyuApp):
             "[dpid=%s][port=%d] state=%s", dpid_str, ev.port_no, of_state[ev.port_state]
         )
 
-    @set_ev_cls(topology_events.EventSwitchEnter, MAIN_DISPATCHER)
-    def _switch_enter_handler(self, ev):
-        datapath = ev.switch.dp
-        asyncio.run(send_switch_enter_event(datapath.id))
+    # Send Switch enter event during EventOFPSwitchFeatures event. The topology change event occurs after adding default flow rules. This is not desirable since switch enter event must be sent before sending flow rule add event
+    # @set_ev_cls(topology_events.EventSwitchEnter, MAIN_DISPATCHER)
+    # def _switch_enter_handler(self, ev):
+    #     datapath = ev.switch.dp
+    #     asyncio.run(send_switch_enter_event(datapath.id))
 
     @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
     def _switch_leave_handler(self, ev):
