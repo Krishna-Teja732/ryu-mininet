@@ -26,7 +26,7 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.topology import event as topology_events
-from ryu.topology.switches import Switch, Link, Host
+from ryu.topology.switches import Port, Switch, Link, Host
 import aiohttp
 import asyncio
 
@@ -62,6 +62,47 @@ async def send_flow_remove_event(dpid, table_id, request_body):
         async with session.delete(
             f"{KG_UPDATE_URL_BASE}/{dpid}/{table_id}/flowrule", json=request_body
         ):
+            pass
+
+
+async def send_link_add_event(link: Link):
+    src: Port = link.src
+    dst: Port = link.dst
+    request_body = dict()
+    request_body = {
+        "src": {"dpid": src.dpid, "port_no": src.port_no},
+        "dst": {"dpid": dst.dpid, "port_no": dst.port_no},
+    }
+    print(f"Link Add: {request_body}")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{KG_UPDATE_URL_BASE}/links", json=request_body):
+            pass
+
+
+async def send_link_delete_event(link: Link):
+    src: Port = link.src
+    dst: Port = link.dst
+    request_body = dict()
+    request_body = {
+        "src": {"dpid": src.dpid, "port_no": src.port_no},
+        "dst": {"dpid": dst.dpid, "port_no": dst.port_no},
+    }
+    print(f"Link Add: {request_body}")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(f"{KG_UPDATE_URL_BASE}/links", json=request_body):
+            pass
+
+
+async def send_host_add_event(host: Host):
+    request_body = {
+        "mac": host.mac,
+        "port": {"dpid": host.port.dpid, "port_no": host.port.port_no},
+    }
+    print(f"Host add: {request_body}")
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{KG_UPDATE_URL_BASE}/hosts", json=request_body):
             pass
 
 
@@ -258,7 +299,7 @@ class STPControllerOFPV_1_3(RyuApp):
     @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
     def _host_add_handler(self, ev):
         host: Host = ev.host
-        self.logger.info(f"Host Add: {host}")
+        asyncio.run(send_host_add_event(host))
 
     @set_ev_cls(topology_events.EventHostMove, MAIN_DISPATCHER)
     def _host_move_handler(self, ev):
@@ -268,9 +309,9 @@ class STPControllerOFPV_1_3(RyuApp):
     @set_ev_cls(topology_events.EventLinkAdd, MAIN_DISPATCHER)
     def _link_add_handler(self, ev):
         link: Link = ev.link
-        self.logger.info(f"Link Add: {link}")
+        asyncio.run(send_link_add_event(link))
 
     @set_ev_cls(topology_events.EventLinkDelete, MAIN_DISPATCHER)
     def _link_delete_handler(self, ev):
         link: Link = ev.link
-        self.logger.info(f"Link delete: {link}")
+        asyncio.run(send_link_delete_event(link))

@@ -93,7 +93,7 @@ class GraphTopo(Topo):
     """
 
     def build(self):
-        number_of_nodes = 30
+        number_of_nodes = 50
         switches = []
         hosts = []
 

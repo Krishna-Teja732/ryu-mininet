@@ -27,7 +27,6 @@ sudo mn --mac --switch ovs,protocol=OpenFlow13 --controller remote,ip=127.0.0.1,
 ```
 
 ### 4. Commands used for event drivent KG build
-- Do not change the IP address for the controller. The NAT is setup based on these IP addresses. Detailed info refer: 
 - Run Ryu controller
 ```sh
 ryu-manager ./controller/ryu_stp_controller_v2.py --wsapi-host=127.0.0.1 --wsapi-port=8090 --observe-links --ofp-tcp-listen-port 10001
