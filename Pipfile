@@ -9,7 +9,7 @@ setuptools = "67.6.1"
 eventlet = "0.30.2"
 mininet = "*"
 ryu = "*"
-aiohttp = "*"
+requests = "*"
 
 [dev-packages]
 

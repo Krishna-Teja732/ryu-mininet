@@ -27,83 +27,68 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.topology import event as topology_events
 from ryu.topology.switches import Port, Switch, Link, Host
-import aiohttp
-import asyncio
-
-KG_UPDATE_URL_BASE = "http://localhost:8080/ryu/openflow13"
+import requests
+import requests.adapters
 
 
-async def send_switch_enter_event(dpid):
-    print(f"Switch Enter: {dpid}")
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{KG_UPDATE_URL_BASE}/{dpid}"):
-            pass
+class KGEventHandler:
 
+    def __init__(self, url_base="http://localhost:8080/ryu/openflow13"):
+        adapter = requests.adapters.HTTPAdapter(pool_maxsize=1, pool_block=True)
+        self.url_base = url_base
+        self.session = requests.session()
+        self.session.mount("http://", adapter)
 
-async def send_switch_leave_event(dpid):
-    print(f"Switch Leave: {dpid}")
-    async with aiohttp.ClientSession() as session:
-        async with session.delete(f"{KG_UPDATE_URL_BASE}/{dpid}"):
-            pass
+    def send_switch_enter_event(self, dpid):
+        print(f"Switch Enter: {dpid}")
+        self.session.post(f"{self.url_base}/{dpid}")
 
+    def send_switch_leave_event(self, dpid):
+        print(f"Switch Leave: {dpid}")
+        self.session.delete(f"{self.url_base}/{dpid}")
 
-async def send_flow_add_event(dpid, table_id, request_body):
-    print(f"Flow Add: {dpid}/{table_id} flowRule: {request_body}")
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{KG_UPDATE_URL_BASE}/{dpid}/{table_id}/flowrule", json=request_body
-        ):
-            pass
+    def send_flow_add_event(self, dpid, table_id, request_body):
+        print(f"Flow Add: {dpid}/{table_id} flowRule: {request_body}")
+        self.session.post(
+            f"{self.url_base}/{dpid}/{table_id}/flowrule", json=request_body
+        )
 
+    def send_flow_remove_event(self, dpid, table_id, request_body):
+        print(f"Flow remove: {dpid}/{table_id} flowRule: {request_body}")
+        self.session.delete(
+            f"{self.url_base}/{dpid}/{table_id}/flowrule", json=request_body
+        )
 
-async def send_flow_remove_event(dpid, table_id, request_body):
-    print(f"Flow remove: {dpid}/{table_id} flowRule: {request_body}")
-    async with aiohttp.ClientSession() as session:
-        async with session.delete(
-            f"{KG_UPDATE_URL_BASE}/{dpid}/{table_id}/flowrule", json=request_body
-        ):
-            pass
+    def send_link_add_event(self, link: Link):
+        src: Port = link.src
+        dst: Port = link.dst
+        request_body = dict()
+        request_body = {
+            "src": {"dpid": src.dpid, "port_no": src.port_no},
+            "dst": {"dpid": dst.dpid, "port_no": dst.port_no},
+        }
+        print(f"Link Add: {request_body}")
 
+        self.session.post(f"{self.url_base}/links", json=request_body)
 
-async def send_link_add_event(link: Link):
-    src: Port = link.src
-    dst: Port = link.dst
-    request_body = dict()
-    request_body = {
-        "src": {"dpid": src.dpid, "port_no": src.port_no},
-        "dst": {"dpid": dst.dpid, "port_no": dst.port_no},
-    }
-    print(f"Link Add: {request_body}")
+    def send_link_delete_event(self, link: Link):
+        src: Port = link.src
+        dst: Port = link.dst
+        request_body = dict()
+        request_body = {
+            "src": {"dpid": src.dpid, "port_no": src.port_no},
+            "dst": {"dpid": dst.dpid, "port_no": dst.port_no},
+        }
+        print(f"Link Add: {request_body}")
+        self.session.delete(f"{self.url_base}/links", json=request_body)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{KG_UPDATE_URL_BASE}/links", json=request_body):
-            pass
-
-
-async def send_link_delete_event(link: Link):
-    src: Port = link.src
-    dst: Port = link.dst
-    request_body = dict()
-    request_body = {
-        "src": {"dpid": src.dpid, "port_no": src.port_no},
-        "dst": {"dpid": dst.dpid, "port_no": dst.port_no},
-    }
-    print(f"Link Add: {request_body}")
-
-    async with aiohttp.ClientSession() as session:
-        async with session.delete(f"{KG_UPDATE_URL_BASE}/links", json=request_body):
-            pass
-
-
-async def send_host_add_event(host: Host):
-    request_body = {
-        "mac": host.mac,
-        "port": {"dpid": host.port.dpid, "port_no": host.port.port_no},
-    }
-    print(f"Host add: {request_body}")
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{KG_UPDATE_URL_BASE}/hosts", json=request_body):
-            pass
+    def send_host_add_event(self, host: Host):
+        request_body = {
+            "mac": host.mac,
+            "port": {"dpid": host.port.dpid, "port_no": host.port.port_no},
+        }
+        print(f"Host add: {request_body}")
+        self.session.post(f"{self.url_base}/hosts", json=request_body)
 
 
 class STPControllerOFPV_1_3(RyuApp):
@@ -114,6 +99,7 @@ class STPControllerOFPV_1_3(RyuApp):
         super(STPControllerOFPV_1_3, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
         self.stp = kwargs["stplib"]
+        self.kg_events = KGEventHandler()
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
@@ -146,16 +132,14 @@ class STPControllerOFPV_1_3(RyuApp):
         for instruction in mod.instructions:
             formatted_inst.append(instruction.to_jsondict())
 
-        asyncio.run(
-            send_flow_add_event(
-                datapath.id,
-                mod.table_id,
-                {
-                    "priority": mod.priority,
-                    "oxm_fields": formatted_match,
-                    "instructions": formatted_inst,
-                },
-            )
+        self.kg_events.send_flow_add_event(
+            datapath.id,
+            mod.table_id,
+            {
+                "priority": mod.priority,
+                "oxm_fields": formatted_match,
+                "instructions": formatted_inst,
+            },
         )
 
         datapath.send_msg(mod)
@@ -182,7 +166,7 @@ class STPControllerOFPV_1_3(RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        asyncio.run(send_switch_enter_event(datapath.id))
+        self.kg_events.send_switch_enter_event(datapath.id)
 
         match = parser.OFPMatch()
         actions = [
@@ -200,15 +184,13 @@ class STPControllerOFPV_1_3(RyuApp):
         for _, match_headers in msg.match.stringify_attrs():
             formatted_match.update(match_headers)
 
-        asyncio.run(
-            send_flow_remove_event(
-                datapath.id,
-                msg.table_id,
-                {
-                    "priority": msg.priority,
-                    "oxm_fields": formatted_match,
-                },
-            )
+        self.kg_events.send_flow_remove_event(
+            datapath.id,
+            msg.table_id,
+            {
+                "priority": msg.priority,
+                "oxm_fields": formatted_match,
+            },
         )
 
     @set_ev_cls(stplib.EventPacketIn, MAIN_DISPATCHER)
@@ -285,21 +267,15 @@ class STPControllerOFPV_1_3(RyuApp):
             "[dpid=%s][port=%d] state=%s", dpid_str, ev.port_no, of_state[ev.port_state]
         )
 
-    # Send Switch enter event during EventOFPSwitchFeatures event. The topology change event occurs after adding default flow rules. This is not desirable since switch enter event must be sent before sending flow rule add event
-    # @set_ev_cls(topology_events.EventSwitchEnter, MAIN_DISPATCHER)
-    # def _switch_enter_handler(self, ev):
-    #     datapath = ev.switch.dp
-    #     asyncio.run(send_switch_enter_event(datapath.id))
-
     @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
     def _switch_leave_handler(self, ev):
         datapath = ev.switch.dp
-        asyncio.run(send_switch_leave_event(datapath.id))
+        self.kg_events.send_switch_leave_event(datapath.id)
 
     @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
     def _host_add_handler(self, ev):
         host: Host = ev.host
-        asyncio.run(send_host_add_event(host))
+        self.kg_events.send_host_add_event(host)
 
     @set_ev_cls(topology_events.EventHostMove, MAIN_DISPATCHER)
     def _host_move_handler(self, ev):
@@ -309,9 +285,9 @@ class STPControllerOFPV_1_3(RyuApp):
     @set_ev_cls(topology_events.EventLinkAdd, MAIN_DISPATCHER)
     def _link_add_handler(self, ev):
         link: Link = ev.link
-        asyncio.run(send_link_add_event(link))
+        self.kg_events.send_link_add_event(link)
 
     @set_ev_cls(topology_events.EventLinkDelete, MAIN_DISPATCHER)
     def _link_delete_handler(self, ev):
         link: Link = ev.link
-        asyncio.run(send_link_delete_event(link))
+        self.kg_events.send_link_delete_event(link)
