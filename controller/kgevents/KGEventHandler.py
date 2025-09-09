@@ -11,7 +11,7 @@ class KGEventHandler:
         self.url_base = url_base
         self.session = requests.session()
         self.session.mount("http://", adapter)
-        self.thread_pool = ThreadPool()
+        self.thread_pool = ThreadPool(1)
 
     def send_switch_enter_event(self, dpid):
         print(f"Switch Enter: {dpid}")
