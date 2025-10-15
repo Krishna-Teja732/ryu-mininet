@@ -27,8 +27,29 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.topology import event as topology_events
 from ryu.topology.switches import Port, Switch, Link, Host
+from multiprocessing import Process, Queue
 
-from kgevents.KGEventHandler import KGEventHandler
+from kgevents import KGEventHandler as kg_events
+
+
+def send_kg_events(queue: Queue):
+    while True:
+        fun, args = queue.get()
+        fun(**args)
+        # Process(target=fun, kwargs=args).start()
+
+
+def send_flow_mod(queue: Queue):
+    while True:
+        obj, arg = queue.get()
+        obj.send_msg(arg)
+
+
+kg_event_queue = Queue()
+Process(target=send_kg_events, args=(kg_event_queue,)).start()
+
+# flow_mod_queue = Queue()
+# Process(target=send_flow_mod, args=(flow_mod_queue,)).start()
 
 
 class STPControllerOFPV_1_3(RyuApp):
@@ -39,7 +60,6 @@ class STPControllerOFPV_1_3(RyuApp):
         super(STPControllerOFPV_1_3, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
         self.stp = kwargs["stplib"]
-        self.kg_events = KGEventHandler()
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
@@ -72,14 +92,19 @@ class STPControllerOFPV_1_3(RyuApp):
         for instruction in mod.instructions:
             formatted_inst.append(instruction.to_jsondict())
 
-        self.kg_events.send_flow_add_event(
-            datapath.id,
-            mod.table_id,
-            {
-                "priority": mod.priority,
-                "oxm_fields": formatted_match,
-                "instructions": formatted_inst,
-            },
+        kg_event_queue.put(
+            (
+                kg_events.send_flow_add_event,
+                {
+                    "dpid": datapath.id,
+                    "table_id": mod.table_id,
+                    "request_body": {
+                        "priority": mod.priority,
+                        "oxm_fields": formatted_match,
+                        "instructions": formatted_inst,
+                    },
+                },
+            )
         )
 
         datapath.send_msg(mod)
@@ -106,7 +131,7 @@ class STPControllerOFPV_1_3(RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        self.kg_events.send_switch_enter_event(datapath.id)
+        kg_event_queue.put((kg_events.send_switch_enter_event, {"dpid": datapath.id}))
 
         match = parser.OFPMatch()
         actions = [
@@ -124,13 +149,18 @@ class STPControllerOFPV_1_3(RyuApp):
         for _, match_headers in msg.match.stringify_attrs():
             formatted_match.update(match_headers)
 
-        self.kg_events.send_flow_remove_event(
-            datapath.id,
-            msg.table_id,
-            {
-                "priority": msg.priority,
-                "oxm_fields": formatted_match,
-            },
+        kg_event_queue.put(
+            (
+                kg_events.send_flow_remove_event,
+                {
+                    "dpid": datapath.id,
+                    "table_id": msg.table_id,
+                    "request_body": {
+                        "priority": msg.priority,
+                        "oxm_fields": formatted_match,
+                    },
+                },
+            )
         )
 
     @set_ev_cls(stplib.EventPacketIn, MAIN_DISPATCHER)
@@ -210,12 +240,22 @@ class STPControllerOFPV_1_3(RyuApp):
     @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
     def _switch_leave_handler(self, ev):
         datapath = ev.switch.dp
-        self.kg_events.send_switch_leave_event(datapath.id)
+        kg_event_queue.put((kg_events.send_switch_leave_event, {"dpid": datapath.id}))
 
     @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
     def _host_add_handler(self, ev):
         host: Host = ev.host
-        self.kg_events.send_host_add_event(host)
+        kg_event_queue.put(
+            (
+                kg_events.send_host_add_event,
+                {
+                    "request_body": {
+                        "mac": host.mac,
+                        "port": {"dpid": host.port.dpid, "port_no": host.port.port_no},
+                    }
+                },
+            )
+        )
 
     @set_ev_cls(topology_events.EventHostMove, MAIN_DISPATCHER)
     def _host_move_handler(self, ev):
@@ -225,9 +265,29 @@ class STPControllerOFPV_1_3(RyuApp):
     @set_ev_cls(topology_events.EventLinkAdd, MAIN_DISPATCHER)
     def _link_add_handler(self, ev):
         link: Link = ev.link
-        self.kg_events.send_link_add_event(link)
+        kg_event_queue.put(
+            (
+                kg_events.send_link_add_event,
+                {
+                    "request_body": {
+                        "src": {"dpid": link.src.dpid, "port_no": link.src.port_no},
+                        "dst": {"dpid": link.dst.dpid, "port_no": link.dst.port_no},
+                    }
+                },
+            )
+        )
 
     @set_ev_cls(topology_events.EventLinkDelete, MAIN_DISPATCHER)
     def _link_delete_handler(self, ev):
         link: Link = ev.link
-        self.kg_events.send_link_delete_event(link)
+        kg_event_queue.put(
+            (
+                kg_events.send_link_delete_event,
+                {
+                    "request_body": {
+                        "src": {"dpid": link.src.dpid, "port_no": link.src.port_no},
+                        "dst": {"dpid": link.dst.dpid, "port_no": link.dst.port_no},
+                    }
+                },
+            )
+        )

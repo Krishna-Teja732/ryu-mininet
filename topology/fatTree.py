@@ -13,7 +13,7 @@ class FatTreeTopo(Topo):
     "Fat-tree topology"
 
     def build(self):
-        k = 6
+        k = 10
 
         num_core_switches = (k // 2) ** 2
         core_switches = []
