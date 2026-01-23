@@ -1,15 +1,14 @@
 from pprint import pprint
-from typing import Literal
+from sys import maxsize as INTMAX
 from ryu.base import app_manager
-from ryu.ofproto import ofproto_v1_3
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
+from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from ryu.lib.packet import ether_types
 from ryu.lib.packet.packet import Packet
 from ryu.lib.packet.ethernet import ethernet
-
-FORWARD_TABLE_ID = 0
-FLOOD_TABLE_ID = 1
+from ryu.lib.packet.ipv4 import ipv4
+from ryu.lib.packet.arp import arp
 
 
 class TreeController(app_manager.RyuApp):
@@ -17,67 +16,74 @@ class TreeController(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(TreeController, self).__init__(*args, **kwargs)
-        self.dst_mac_address_to_port = dict()
-        self.branch_factor = 6
+        self.branch_factor = 4
+        # Format
+        # [<dpid>] : {
+        #       [<dst_addr>]: {
+        #           [<port_num>] : [<flow_count>], 
+        #           [<port_num>] : [<flow_count>], 
+        #       },
+        #       [<dst_addr>]: {
+        #           [<port_num>] : [<flow_count>], 
+        #           [<port_num>] : [<flow_count>], 
+        #       },
+        #} 
+        self.ip_table: dict[int, dict[str, dict[int,int]]]= dict()
 
-    def __init_forward_table(self, datapath, ofp, ofp_parser):
-        # TODO: Send to controller to instead of sending to flood table
-        broadcast_pkt_instructions = [
-            ofp_parser.OFPInstructionGotoTable(FLOOD_TABLE_ID)
-        ]
-        go_to_flood_table = ofp_parser.OFPFlowMod(
+    def __add_flow(self, datapath, priority, match, actions):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        mod: ofproto_v1_3_parser.OFPFlowMod = parser.OFPFlowMod(
             datapath=datapath,
-            table_id=FORWARD_TABLE_ID,
-            match=ofp_parser.OFPMatch(),
-            priority=0,
-            instructions=broadcast_pkt_instructions,
+            priority=priority,
+            match=match,
+            instructions=inst,
+            flags=ofproto_v1_3.OFPFF_SEND_FLOW_REM,
         )
-        datapath.send_msg(go_to_flood_table)
+        datapath.send_msg(mod)
 
-    def __init_flood_table(self, datapath, ofp, ofp_parser):
-        # Broadcast to ports from range [k/2 + 1, k] to prevent broadcast storming
-        partial_flood_actions = [
-            ofp_parser.OFPActionOutput(port)
-            for port in range(self.branch_factor // 2 + 1, self.branch_factor + 1)
-        ]
-        partial_flood_instruction = [
-            ofp_parser.OFPInstructionActions(
-                ofp.OFPIT_APPLY_ACTIONS, partial_flood_actions
-            )
-        ]
-        for in_port in range(1, self.branch_factor // 2 + 1):
-            partial_flood_flow_mod = ofp_parser.OFPFlowMod(
-                datapath=datapath,
-                table_id=FLOOD_TABLE_ID,
-                match=ofp_parser.OFPMatch(in_port=in_port),
-                priority=0,
-                instructions=partial_flood_instruction,
-            )
-            datapath.send_msg(partial_flood_flow_mod)
 
-        # Default action: flood. Because of the previous match condition, packets with in_port in range
-        # [branch_factor/2, branch_factor] will be matched. This will not cause broadcast storming
-        flood_action = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
-        flood_instruction = [
-            ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS, flood_action)
-        ]
-        table_miss_flow_rule = ofp_parser.OFPFlowMod(
-            datapath=datapath,
-            table_id=FLOOD_TABLE_ID,
-            match=ofp_parser.OFPMatch(),
-            priority=0,
-            instructions=flood_instruction,
-        )
-        datapath.send_msg(table_miss_flow_rule)
+    def __init_default_flow_rule(self, datapath, ofp, ofp_parser):
+        match = ofp_parser.OFPMatch()
+        actions = [ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER)]
+        self.__add_flow(datapath, 0, match, actions)
+
+        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6)
+        self.__add_flow(datapath, 65535, match, [])
+
+
+    def __init_flood_flow_rules(self, datapath, ofp, ofp_parser):
+        is_core_switch = datapath.id <= (self.branch_factor // 2)**2
+        min_port = self.branch_factor // 2 + 1
+        if is_core_switch:
+            min_port = 1 
+        # Packets in in_port [(K//2) + 1, K] are from lower layers, flood these packets
+        action = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD), ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER)]
+        for in_port in range(min_port, self.branch_factor + 1):
+            match=ofp_parser.OFPMatch(in_port=in_port, eth_dst="FF:FF:FF:FF:FF:FF")
+            self.__add_flow(datapath, 1000, match, action)
+
+        if not is_core_switch:
+            # Packets received through first K ports are from uppler layer, send it only downwards
+            partial_flood_actions = [ofp_parser.OFPActionOutput(port) 
+                                     for port in range(self.branch_factor // 2 + 1, self.branch_factor + 1)]
+            partial_flood_actions.append(ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER))
+            for in_port in range(1, (self.branch_factor // 2) + 1):
+                match=ofp_parser.OFPMatch(in_port=in_port, eth_dst="FF:FF:FF:FF:FF:FF")
+                self.__add_flow(datapath, 1000, match, partial_flood_actions)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def features_handler(self, ev):
         datapath = ev.msg.datapath
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
+        self.ip_table[datapath.id] = dict()
 
-        self.__init_forward_table(datapath, ofp, ofp_parser)
-        self.__init_flood_table(datapath, ofp, ofp_parser)
+        self.__init_default_flow_rule(datapath, ofp, ofp_parser)
+        self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
+
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -87,37 +93,54 @@ class TreeController(app_manager.RyuApp):
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
 
-        data = None
-        if msg.buffer_id == ofp.OFP_NO_BUFFER:
-            data = msg.data
-
         eth_headers = Packet(msg.data).get_protocol(ethernet)
-        # If the packet is an LLDP packet, the peer on the port is a switch
         if eth_headers.ethertype == ether_types.ETH_TYPE_LLDP:
             return
 
-        # learning switch implementation
-        if datapath.id not in self.dst_mac_address_to_port.keys():
-            self.dst_mac_address_to_port[datapath.id] = dict()
+        src_ip_addr = None
+        dst_ip_addr = None
+        if eth_headers.ethertype == ether_types.ETH_TYPE_IP:
+            ip_headers = Packet(msg.data).get_protocol(ipv4)
+            src_ip_addr = ip_headers.src
+            dst_ip_addr = ip_headers.dst
+        if eth_headers.ethertype == ether_types.ETH_TYPE_ARP:
+            arp_headers = Packet(msg.data).get_protocol(arp)
+            src_ip_addr = arp_headers.src_ip
+            dst_ip_addr = arp_headers.dst_ip
 
-        self.dst_mac_address_to_port[datapath.id][eth_headers.src] = in_port
+        if src_ip_addr is None or dst_ip_addr is None:
+            print("WARN: found packet with no ip src/dst. Packet: ", eth_headers)
+            return 
 
-        if eth_headers.dst in self.dst_mac_address_to_port[datapath.id].keys():
-            output_port = self.dst_mac_address_to_port[datapath.id][eth_headers.dst]
-            actions = [ofp_parser.OFPActionOutput(output_port)]
+        forward_table = self.ip_table.get(datapath.id)
+        if forward_table is None: 
+            print("WARN: switch not initialized")
+            return
+        if src_ip_addr not in forward_table:
+            forward_table[src_ip_addr] = dict()
+        if in_port not in forward_table[src_ip_addr]:
+            forward_table[src_ip_addr][in_port] = 0
 
-            # if the peer is a host, strip the vlan before forwarding
-            if self.datapath_ports[datapath.id][output_port]["peer_type"] == "host":
-                actions.insert(0, ofp_parser.OFPActionPopVlan())
+        # No action is performed for broadcast packets. These packets are used to only learn the port of src_ip
+        if eth_headers.dst == "ff:ff:ff:ff:ff:ff":
+            return
 
-            pkt_forward_instruction = [
-                ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS, actions)
-            ]
-            forward_pkt = ofp_parser.OFPFlowMod(
-                datapath=datapath,
-                table_id=FORWARD_TABLE_ID,
-                match=ofp_parser.OFPMatch(eth_dst=eth_headers.dst),
-                priority=1,
-                instructions=pkt_forward_instruction,
-            )
-            datapath.send_msg(forward_pkt)
+        if dst_ip_addr not in forward_table or len(forward_table[dst_ip_addr]) == 0:
+            print(f"WARN: Network not reachable. IP: {dst_ip_addr} through DPID: {datapath.id}")
+            return
+
+        ports = forward_table[dst_ip_addr]
+        output_port = None
+        output_port_flow_count = INTMAX 
+        for port_num in ports.keys():
+            if ports[port_num] < output_port_flow_count:
+                output_port = port_num
+                output_port_flow_count = ports[port_num]
+        # TODO: Increment flow count for the output port
+
+        if output_port is None:
+            print(f"WARN: Output port is None. Cannot add flow rule")
+            return
+        actions = [ofp_parser.OFPActionOutput(output_port)]
+        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=dst_ip_addr)
+        self.__add_flow(datapath, 5000, match, actions)
