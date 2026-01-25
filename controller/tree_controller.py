@@ -28,7 +28,7 @@ class TreeController(app_manager.RyuApp):
         #           [<port_num>] : [<flow_count>], 
         #       },
         #} 
-        self.ip_table: dict[int, dict[str, dict[int,int]]]= dict()
+        self.all_switch_mac_table: dict[int, dict[str, dict[int,int]]]= dict()
 
     def __add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
@@ -79,7 +79,7 @@ class TreeController(app_manager.RyuApp):
         datapath = ev.msg.datapath
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
-        self.ip_table[datapath.id] = dict()
+        self.all_switch_mac_table[datapath.id] = dict()
 
         self.__init_default_flow_rule(datapath, ofp, ofp_parser)
         self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
@@ -93,61 +93,61 @@ class TreeController(app_manager.RyuApp):
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
 
+        data = None
+        if msg.buffer_id == ofp.OFP_NO_BUFFER:
+            data = msg.data
+
         eth_headers = Packet(msg.data).get_protocol(ethernet)
         if eth_headers.ethertype == ether_types.ETH_TYPE_LLDP:
             return
+        eth_src = eth_headers.src
+        eth_dst = eth_headers.dst
 
-        src_ip_addr = None
-        dst_ip_addr = None
-        if eth_headers.ethertype == ether_types.ETH_TYPE_IP:
-            ip_headers = Packet(msg.data).get_protocol(ipv4)
-            src_ip_addr = ip_headers.src
-            dst_ip_addr = ip_headers.dst
-        if eth_headers.ethertype == ether_types.ETH_TYPE_ARP:
-            arp_headers = Packet(msg.data).get_protocol(arp)
-            src_ip_addr = arp_headers.src_ip
-            dst_ip_addr = arp_headers.dst_ip
-
-        if src_ip_addr is None or dst_ip_addr is None:
-            print("WARN: found packet with no ip src/dst. Packet: ", eth_headers)
-            return 
-
-        forward_table = self.ip_table.get(datapath.id)
+        forward_table = self.all_switch_mac_table.get(datapath.id)
         if forward_table is None: 
             print("WARN: switch not initialized")
             return
-        if src_ip_addr not in forward_table:
-            forward_table[src_ip_addr] = dict()
-        if in_port not in forward_table[src_ip_addr]:
-            forward_table[src_ip_addr][in_port] = 0
+        if eth_src not in forward_table:
+            forward_table[eth_src] = dict()
+        if in_port not in forward_table[eth_src]:
+            forward_table[eth_src][in_port] = 0
 
-        # No action is performed for broadcast packets. These packets are used to only learn the port of src_ip
+        # No action is performed for broadcast packets. 
+        # Flow rules for broadcast packets are already installed
+        # These packets are used to only learn the port of src_ip
         if eth_headers.dst == "ff:ff:ff:ff:ff:ff":
             return
 
-        if dst_ip_addr not in forward_table or len(forward_table[dst_ip_addr]) == 0:
-            print(f"WARN: Network not reachable. IP: {dst_ip_addr} through DPID: {datapath.id}")
+        # TODO: Broacast packets if dst is not reachable
+        # Mininet does not send apr request for each host
+        # Host magically learns the mac of other hosts without sending ARP
+        # Since Mininet host does not ARP, we won't know the dst, so broadcast it 
+        if eth_dst not in forward_table or len(forward_table[eth_dst]) == 0:
             return
 
-        ports = forward_table[dst_ip_addr]
+        ports = forward_table[eth_dst]
         output_port = None
         output_port_flow_count = INTMAX 
         for port_num in ports.keys():
             if ports[port_num] < output_port_flow_count:
                 output_port = port_num
                 output_port_flow_count = ports[port_num]
-        # TODO: Increment flow count for the output port
-
         if output_port is None:
             print(f"WARN: Output port is None. Cannot add flow rule")
             return
+        forward_table[eth_dst][output_port] += 1
 
         actions = [ofp_parser.OFPActionOutput(output_port)]
-        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=dst_ip_addr)
-        self.__add_flow(datapath, 500, match, actions)
+        match = ofp_parser.OFPMatch(eth_dst=eth_dst)
+        self.__add_flow(datapath, 5000, match, actions)
 
-        actions = [ofp_parser.OFPActionOutput(output_port)]
-        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=dst_ip_addr)
-        self.__add_flow(datapath, 500, match, actions)
-
-
+        # Need to send the data packet back to switch
+        # Switch does buffer the data packets
+        out = ofp_parser.OFPPacketOut(
+            datapath=datapath,
+            buffer_id=msg.buffer_id,
+            in_port=in_port,
+            actions=actions,
+            data=data,
+        )
+        datapath.send_msg(out)
