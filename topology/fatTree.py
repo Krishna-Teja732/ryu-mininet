@@ -1,4 +1,7 @@
+from mininet.node import RemoteController
 from mininet.topo import Topo
+from mininet.net import Mininet
+from mininet.cli import CLI
 
 
 # Fat tree topology reference: https://www.cs.cornell.edu/courses/cs5413/2014fa/lectures/08-fattree.pdf
@@ -11,21 +14,23 @@ from mininet.topo import Topo
 #   - Ports from [k/2 + 1, k] is connected to host
 class FatTreeTopo(Topo):
     "Fat-tree topology"
+    def __init__(self, k, *args, **params):
+        self.k = k
+        super().__init__(*args, **params)
 
     def build(self):
-        k = 10
-
+        k = self.k 
         num_core_switches = (k // 2) ** 2
         core_switches = []
         switch_id = 1
         host_id = 1
         # Core switches
-        for core_ind in range(num_core_switches):
+        for _ in range(num_core_switches):
             core_switches.append(self.addSwitch(f"c{switch_id}"))
             switch_id += 1
 
         # Pods
-        for pod_ind in range(k):
+        for _ in range(k):
             pod_agg_switches = []
             # Each Pod has k/2 agg switches
             for ind in range(k // 2):
@@ -52,4 +57,16 @@ class FatTreeTopo(Topo):
                     self.addLink(host, edge_switch)
 
 
-topos = {"FatTreeTopo": (lambda: FatTreeTopo())}
+topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
+
+
+if __name__ == "__main__":
+    net = Mininet(topo=FatTreeTopo(8), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
+    net.start()
+
+    for ind, host in enumerate(net.hosts):
+        host2 = net.hosts[(ind + 1) % len(net.hosts)]
+        print(host.cmd('arping -c 5 ' + host2.IP()))
+
+    CLI(net)
+    net.stop()

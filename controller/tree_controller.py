@@ -7,8 +7,6 @@ from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from ryu.lib.packet import ether_types
 from ryu.lib.packet.packet import Packet
 from ryu.lib.packet.ethernet import ethernet
-from ryu.lib.packet.ipv4 import ipv4
-from ryu.lib.packet.arp import arp
 
 
 class TreeController(app_manager.RyuApp):
@@ -16,7 +14,7 @@ class TreeController(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(TreeController, self).__init__(*args, **kwargs)
-        self.branch_factor = 4
+        self.branch_factor = 8 
         # Format
         # [<dpid>] : {
         #       [<dst_addr>]: {
@@ -118,10 +116,6 @@ class TreeController(app_manager.RyuApp):
         if eth_headers.dst == "ff:ff:ff:ff:ff:ff":
             return
 
-        # TODO: Broacast packets if dst is not reachable
-        # Mininet does not send apr request for each host
-        # Host magically learns the mac of other hosts without sending ARP
-        # Since Mininet host does not ARP, we won't know the dst, so broadcast it 
         if eth_dst not in forward_table or len(forward_table[eth_dst]) == 0:
             return
 
@@ -135,7 +129,7 @@ class TreeController(app_manager.RyuApp):
         if output_port is None:
             print(f"WARN: Output port is None. Cannot add flow rule")
             return
-        forward_table[eth_dst][output_port] += 1
+        forward_table[eth_dst][output_port] = forward_table[eth_dst][output_port] +  1
 
         actions = [ofp_parser.OFPActionOutput(output_port)]
         match = ofp_parser.OFPMatch(eth_dst=eth_dst)
