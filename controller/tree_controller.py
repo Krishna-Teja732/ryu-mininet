@@ -141,6 +141,13 @@ class TreeController(app_manager.RyuApp):
         if output_port is None:
             print(f"WARN: Output port is None. Cannot add flow rule")
             return
+
+        actions = [ofp_parser.OFPActionOutput(output_port)]
+        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=dst_ip_addr)
+        self.__add_flow(datapath, 500, match, actions)
+
         actions = [ofp_parser.OFPActionOutput(output_port)]
         match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=dst_ip_addr)
-        self.__add_flow(datapath, 5000, match, actions)
+        self.__add_flow(datapath, 500, match, actions)
+
+
