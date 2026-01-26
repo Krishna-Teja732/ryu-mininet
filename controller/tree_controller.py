@@ -1,4 +1,4 @@
-from pprint import pprint
+from collections import deque
 from os_ken.base.app_manager import OSKenApp
 from os_ken.controller import ofp_event
 from os_ken.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
@@ -6,41 +6,27 @@ from os_ken.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from os_ken.lib.packet import ether_types
 from os_ken.lib.packet.packet import Packet
 from os_ken.lib.packet.ethernet import ethernet
-from dataclasses import dataclass
-from collections import deque
-
-@dataclass
-class Port:
-    port_number: int
-    flow_count: int
 
 class TreeController(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(TreeController, self).__init__(*args, **kwargs)
-        self.branch_factor = 8
+        self.branch_factor = 4
         # Format
         # [<dpid>] : {
-        #       [<dst_addr>]: {
-        #           [<port_num>] : [<flow_count>], 
-        #           [<port_num>] : [<flow_count>], 
-        #       },
-        #       [<dst_addr>]: {
-        #           [<port_num>] : [<flow_count>], 
-        #           [<port_num>] : [<flow_count>], 
-        #       },
+        #       [<dst_addr>]: [
+        #           [<port_num>], 
+        #           [<port_num>], 
+        #       ],
         #} 
-        self.all_switch_mac_table: dict[int, dict[str, deque[Port]]]= dict()
+        self.all_switch_mac_table: dict[int, dict[str, deque[int]]]= dict()
         # Format
         # [<dpid>] : {
-        #       [<dst_addr>]: {
-        #           [<port_num>] : [<flow_count>], 
-        #           [<port_num>] : [<flow_count>], 
-        #       },
         #       [<dst_addr>]: {
         #           [<port_num>], 
-        #           [<port_num>], },
+        #           [<port_num>], 
+        #       }, 
         #} 
         self.all_switch_ports: dict[int, dict[str, set[int]]]= dict()
 
@@ -128,9 +114,8 @@ class TreeController(OSKenApp):
             port_table[eth_src] = set()
         if in_port not in port_table[eth_src]:
             port_table[eth_src].add(in_port)
-            forward_table[eth_src].append(Port(in_port, 0))
-            pprint(self.all_switch_ports)
-            print("")
+            forward_table[eth_src].append(in_port)
+            print(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
 
 
         # No action is performed for broadcast packets. 
@@ -143,15 +128,15 @@ class TreeController(OSKenApp):
             print(f"WARN: {eth_dst} not reachable through switch {datapath.id}")
             return
 
-        port = forward_table[eth_dst][0]
+        port_number = forward_table[eth_dst][0]
         forward_table[eth_dst].rotate()
-        port.flow_count = port.flow_count + 1
-        actions = [ofp_parser.OFPActionOutput(port.port_number)]
+
+        actions = [ofp_parser.OFPActionOutput(port_number)]
         match = ofp_parser.OFPMatch(eth_dst=eth_dst)
         self.__add_flow(datapath, 5000, match, actions)
 
         # Need to send the data packet back to switch
-        # Switch does buffer the data packets
+        # Switch does not buffer the data packets
         out = ofp_parser.OFPPacketOut(
             datapath=datapath,
             buffer_id=msg.buffer_id,
@@ -160,3 +145,6 @@ class TreeController(OSKenApp):
             data=data,
         )
         datapath.send_msg(out)
+
+        del ev
+        del datapath

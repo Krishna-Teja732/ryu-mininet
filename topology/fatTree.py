@@ -62,11 +62,18 @@ topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
 
 
 if __name__ == "__main__":
-    net = Mininet(topo=FatTreeTopo(8), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
+    net = Mininet(topo=FatTreeTopo(4), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
     net.start()
+    print(f"Added {len(net.switches)} Switches")
+    print(f"Added {len(net.hosts)} Hosts")
+    print(f"Added {len(net.links)} Links")
+    print(f"Sleep for 90 seconds. Wait for flood rules to be added to the switches")
+    sleep(90)
 
+    print("Sending gratuitous arp for each host")
     for host in net.hosts:
         print(host.cmd(f"arping -U -c 1 -I {host.defaultIntf().name} {host.IP()}"))
+        sleep(0.2)
 
     CLI(net)
     net.stop()
