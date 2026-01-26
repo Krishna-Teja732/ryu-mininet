@@ -7,14 +7,20 @@ from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from ryu.lib.packet import ether_types
 from ryu.lib.packet.packet import Packet
 from ryu.lib.packet.ethernet import ethernet
+from dataclasses import dataclass
+from collections import deque
 
+@dataclass
+class Port:
+    port_number: int
+    flow_count: int
 
 class TreeController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(TreeController, self).__init__(*args, **kwargs)
-        self.branch_factor = 8 
+        self.branch_factor = 4
         # Format
         # [<dpid>] : {
         #       [<dst_addr>]: {
@@ -26,7 +32,18 @@ class TreeController(app_manager.RyuApp):
         #           [<port_num>] : [<flow_count>], 
         #       },
         #} 
-        self.all_switch_mac_table: dict[int, dict[str, dict[int,int]]]= dict()
+        self.all_switch_mac_table: dict[int, dict[str, deque[Port]]]= dict()
+        # Format
+        # [<dpid>] : {
+        #       [<dst_addr>]: {
+        #           [<port_num>] : [<flow_count>], 
+        #           [<port_num>] : [<flow_count>], 
+        #       },
+        #       [<dst_addr>]: {
+        #           [<port_num>], 
+        #           [<port_num>], },
+        #} 
+        self.all_switch_ports: dict[int, dict[str, set[int]]]= dict()
 
     def __add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
@@ -78,6 +95,7 @@ class TreeController(app_manager.RyuApp):
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
         self.all_switch_mac_table[datapath.id] = dict()
+        self.all_switch_ports[datapath.id] = dict()
 
         self.__init_default_flow_rule(datapath, ofp, ofp_parser)
         self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
@@ -102,13 +120,16 @@ class TreeController(app_manager.RyuApp):
         eth_dst = eth_headers.dst
 
         forward_table = self.all_switch_mac_table.get(datapath.id)
-        if forward_table is None: 
+        port_table = self.all_switch_ports.get(datapath.id)
+        if forward_table is None or port_table is None:
             print("WARN: switch not initialized")
             return
         if eth_src not in forward_table:
-            forward_table[eth_src] = dict()
-        if in_port not in forward_table[eth_src]:
-            forward_table[eth_src][in_port] = 0
+            forward_table[eth_src] = deque()
+            port_table[eth_src] = set()
+        if in_port not in port_table[eth_src]:
+            port_table[eth_src].add(in_port)
+            forward_table[eth_src].append(Port(in_port, 0))
 
         # No action is performed for broadcast packets. 
         # Flow rules for broadcast packets are already installed
@@ -117,21 +138,13 @@ class TreeController(app_manager.RyuApp):
             return
 
         if eth_dst not in forward_table or len(forward_table[eth_dst]) == 0:
+            print(f"WARN: {eth_dst} not reachable through switch {datapath.id}")
             return
 
-        ports = forward_table[eth_dst]
-        output_port = None
-        output_port_flow_count = INTMAX 
-        for port_num in ports.keys():
-            if ports[port_num] < output_port_flow_count:
-                output_port = port_num
-                output_port_flow_count = ports[port_num]
-        if output_port is None:
-            print(f"WARN: Output port is None. Cannot add flow rule")
-            return
-        forward_table[eth_dst][output_port] = forward_table[eth_dst][output_port] +  1
-
-        actions = [ofp_parser.OFPActionOutput(output_port)]
+        port = forward_table[eth_dst][0]
+        forward_table[eth_dst].rotate()
+        port.flow_count = port.flow_count + 1
+        actions = [ofp_parser.OFPActionOutput(port.port_number)]
         match = ofp_parser.OFPMatch(eth_dst=eth_dst)
         self.__add_flow(datapath, 5000, match, actions)
 

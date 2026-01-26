@@ -1,3 +1,4 @@
+from time import sleep
 from mininet.node import RemoteController
 from mininet.topo import Topo
 from mininet.net import Mininet
@@ -61,12 +62,11 @@ topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
 
 
 if __name__ == "__main__":
-    net = Mininet(topo=FatTreeTopo(8), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
+    net = Mininet(topo=FatTreeTopo(4), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
     net.start()
 
-    for ind, host in enumerate(net.hosts):
-        host2 = net.hosts[(ind + 1) % len(net.hosts)]
-        print(host.cmd('arping -c 5 ' + host2.IP()))
+    for host in net.hosts:
+        print(host.cmd(f"arping -U -c 1 -I {host.defaultIntf().name} {host.IP()}"))
 
     CLI(net)
     net.stop()
