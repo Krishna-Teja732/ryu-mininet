@@ -4,15 +4,11 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pip = "20.3.4"
-setuptools = "67.6.1"
-eventlet = "0.30.2"
 mininet = "*"
-ryu = "*"
+os-ken = "*"
 requests = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.9"
-python_full_version = "3.9.21"
+python_version = "3.14"

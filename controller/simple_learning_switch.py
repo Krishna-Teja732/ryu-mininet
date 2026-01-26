@@ -1,17 +1,17 @@
-from ryu.base import app_manager
-from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
-from ryu.ofproto import ofproto_v1_0
+from os_ken.base.app_manager import OSKenApp
+from os_ken.controller import ofp_event
+from os_ken.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
+from os_ken.ofproto import ofproto_v1_0
 
 # Get the ethernet header from packet
-from ryu.lib.packet.ethernet import ethernet
-from ryu.lib.packet import ether_types
+from os_ken.lib.packet.ethernet import ethernet
+from os_ken.lib.packet import ether_types
 
 ## Convert bytes to object of protos in the bytes(used for decoding the bytes)
-from ryu.lib.packet.packet import Packet
+from os_ken.lib.packet.packet import Packet
 
 
-class L2LearningSwitch(app_manager.RyuApp):
+class L2LearningSwitch(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
@@ -44,7 +44,7 @@ class L2LearningSwitch(app_manager.RyuApp):
     # MAIN_DISPATCHER is the phase after the switch is configured
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
-        # Here msg is of the type ryu.ofproto.ofproto_<<version>>_parser.OFPPacketIn
+        # Here msg is of the type os_ken.ofproto.ofproto_<<version>>_parser.OFPPacketIn
         msg = ev.msg
 
         # Here the data path is the switch

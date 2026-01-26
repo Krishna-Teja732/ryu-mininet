@@ -4,21 +4,17 @@
 pipenv install
 ```
 
-### 2. Run Ryu application
+### 2. Run osken application
 - Use virtual env shell 
 ```sh
 pipenv shell
 ```
-- To run an ryu application, the ryu-manager command is used. 
+- To run an osken application, the osken-manager command is used. 
 ```sh
-ryu-manager ./controller/ryu_stp_controller.py ryu.app.rest_topology ryu.app.ofctl_rest --wsapi-host=127.0.0.1 --wsapi-port=8080 --observe-links --ofp-tcp-listen-port 10001
-ryu-manager ryu.app.simple_switch_13 ryu.app.rest_topology ryu.app.ofctl_rest --wsapi-host=127.0.0.1 --wsapi-port=8080 --observe-links --ofp-tcp-listen-port 10001
+osken-manager ./controller/stp_controller.py --observe-links --ofp-tcp-listen-port 10001
 ```
 - We are running three applications
-    - ./controller/ryu_stp_controller.py: STP application, prevents loops in the network
-    - ryu.app.rest_topology: Enables /v1.0/topology REST APIs([Source code](https://github.com/faucetsdn/ryu/blob/master/ryu/app/rest_topology.py))
-    - ryu.app.ofctl_rest: Enables /stats/ REST APIs([RYU OFCTL Application](https://ryu.readthedocs.io/en/latest/app/ofctl_rest.html#get-table-features))
-- The APIs are accessible through localhost:8080 
+    - ./controller/stp_controller.py: STP application, prevents loops in the network
 
 ### 3. Run mininet topology
 - Use the following command to create a topology
@@ -27,9 +23,9 @@ sudo mn --mac --switch ovs,protocol=OpenFlow13 --controller remote,ip=127.0.0.1,
 ```
 
 ### 4. Commands used for event drivent KG build
-- Run Ryu controller
+- Run osken controller
 ```sh
-ryu-manager ./controller/ryu_stp_controller_v2.py --wsapi-host=127.0.0.1 --wsapi-port=8090 --observe-links --ofp-tcp-listen-port 10001
+osken-manager ./controller/stp_controller_v2.py --observe-links --ofp-tcp-listen-port 10001
 ```
 - Run mininet
 ```sh

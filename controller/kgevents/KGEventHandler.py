@@ -1,7 +1,7 @@
 import requests
 import requests.adapters
 from multiprocessing.pool import ThreadPool
-from ryu.topology.switches import Port, Switch, Link, Host
+from os_ken.topology.switches import Port, Switch, Link, Host
 
 adapter = requests.adapters.HTTPAdapter(pool_maxsize=1, pool_block=True)
 url_base = "http://localhost:8080/ryu/openflow13"

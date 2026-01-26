@@ -1,12 +1,11 @@
 from pprint import pprint
-from sys import maxsize as INTMAX
-from ryu.base import app_manager
-from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
-from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
-from ryu.lib.packet import ether_types
-from ryu.lib.packet.packet import Packet
-from ryu.lib.packet.ethernet import ethernet
+from os_ken.base.app_manager import OSKenApp
+from os_ken.controller import ofp_event
+from os_ken.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
+from os_ken.ofproto import ofproto_v1_3, ofproto_v1_3_parser
+from os_ken.lib.packet import ether_types
+from os_ken.lib.packet.packet import Packet
+from os_ken.lib.packet.ethernet import ethernet
 from dataclasses import dataclass
 from collections import deque
 
@@ -15,12 +14,12 @@ class Port:
     port_number: int
     flow_count: int
 
-class TreeController(app_manager.RyuApp):
+class TreeController(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(TreeController, self).__init__(*args, **kwargs)
-        self.branch_factor = 4
+        self.branch_factor = 8
         # Format
         # [<dpid>] : {
         #       [<dst_addr>]: {
@@ -130,6 +129,9 @@ class TreeController(app_manager.RyuApp):
         if in_port not in port_table[eth_src]:
             port_table[eth_src].add(in_port)
             forward_table[eth_src].append(Port(in_port, 0))
+            pprint(self.all_switch_ports)
+            print("")
+
 
         # No action is performed for broadcast packets. 
         # Flow rules for broadcast packets are already installed

@@ -62,7 +62,7 @@ topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
 
 
 if __name__ == "__main__":
-    net = Mininet(topo=FatTreeTopo(4), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
+    net = Mininet(topo=FatTreeTopo(8), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
     net.start()
 
     for host in net.hosts:
