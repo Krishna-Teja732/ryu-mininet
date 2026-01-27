@@ -9,10 +9,11 @@ from os_ken.lib.packet.packet import Packet
 from os_ken.lib.packet.ethernet import ethernet
 from os_ken.topology import event as topology_events
 from os_ken.topology.switches import Port, Switch, Link, Host
-import threading
 
-import sys
-print(f"Free threaded build: {not sys._is_gil_enabled()}")
+import resource
+soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+print(f"Resource Limits for open files(soft, hard): {resource.getrlimit(resource.RLIMIT_NOFILE)}")
 
 from kgevents import KGEventHandler as kg_events
 
@@ -38,7 +39,7 @@ class TreeControllerV2(OSKenApp):
         #       }, 
         #} 
         self.all_switch_ports: dict[int, dict[str, set[int]]]= dict()
-        self.table_lock = threading.RLock()
+
 
     def __add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
@@ -104,6 +105,7 @@ class TreeControllerV2(OSKenApp):
                 match=ofp_parser.OFPMatch(in_port=in_port, eth_dst="FF:FF:FF:FF:FF:FF")
                 self.__add_flow(datapath, 1000, match, partial_flood_actions)
 
+
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -113,8 +115,10 @@ class TreeControllerV2(OSKenApp):
         body = {"dpid": datapath.id}
         kg_events.send_switch_enter_event(**body)
 
-        self.all_switch_mac_table[datapath.id] = dict()
-        self.all_switch_ports[datapath.id] = dict()
+        # Add only if the datapath is not already present
+        if datapath.id not in self.all_switch_mac_table:
+            self.all_switch_mac_table[datapath.id] = dict()
+            self.all_switch_ports[datapath.id] = dict()
 
         self.__init_default_flow_rule(datapath, ofp, ofp_parser)
         self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
@@ -143,10 +147,6 @@ class TreeControllerV2(OSKenApp):
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
-        thread = threading.Thread(target=self.packet_in_helper, args=(ev,))
-        thread.start()
-
-    def packet_in_helper(self, ev):
         msg = ev.msg
         in_port = msg.match["in_port"]
         datapath = msg.datapath
@@ -168,14 +168,13 @@ class TreeControllerV2(OSKenApp):
         if forward_table is None or port_table is None:
             print("WARN: switch not initialized")
             return
-        with self.table_lock:
-            if eth_src not in forward_table:
-                forward_table[eth_src] = deque()
-                port_table[eth_src] = set()
-            if in_port not in port_table[eth_src]:
-                port_table[eth_src].add(in_port)
-                forward_table[eth_src].append(in_port)
-                print(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
+        if eth_src not in forward_table:
+            forward_table[eth_src] = deque()
+            port_table[eth_src] = set()
+        if in_port not in port_table[eth_src]:
+            port_table[eth_src].add(in_port)
+            forward_table[eth_src].append(in_port)
+            print(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
 
 
         # No action is performed for broadcast packets. 
@@ -188,9 +187,8 @@ class TreeControllerV2(OSKenApp):
             print(f"WARN: {eth_dst} not reachable through switch {datapath.id}")
             return
 
-        with self.table_lock:
-            port_number = forward_table[eth_dst][0]
-            forward_table[eth_dst].rotate()
+        port_number = forward_table[eth_dst][0]
+        forward_table[eth_dst].rotate()
 
         actions = [ofp_parser.OFPActionOutput(port_number)]
         match = ofp_parser.OFPMatch(eth_src=eth_src,eth_dst=eth_dst)
@@ -207,14 +205,13 @@ class TreeControllerV2(OSKenApp):
         )
         datapath.send_msg(out)
 
-        del ev
-        del datapath
 
     @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
     def _switch_leave_handler(self, ev):
         datapath = ev.switch.dp
         body = {"dpid": datapath.id}
         kg_events.send_switch_leave_event(**body)
+
 
     @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
     def _host_add_handler(self, ev):
@@ -227,10 +224,12 @@ class TreeControllerV2(OSKenApp):
                 }
         kg_events.send_host_add_event(**body)
 
+
     @set_ev_cls(topology_events.EventHostMove, MAIN_DISPATCHER)
     def _host_move_handler(self, ev):
         host: Host = ev.host
         self.logger.info(f"Host Move: {host}")
+
 
     @set_ev_cls(topology_events.EventLinkAdd, MAIN_DISPATCHER)
     def _link_add_handler(self, ev):
@@ -242,6 +241,7 @@ class TreeControllerV2(OSKenApp):
                     }
                 }
         kg_events.send_link_add_event(**body)
+
 
     @set_ev_cls(topology_events.EventLinkDelete, MAIN_DISPATCHER)
     def _link_delete_handler(self, ev):

@@ -117,6 +117,7 @@ class TreeController(OSKenApp):
             forward_table[eth_src].append(in_port)
             print(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
 
+        pprint(self.all_switch_mac_table)
 
         # No action is performed for broadcast packets. 
         # Flow rules for broadcast packets are already installed
