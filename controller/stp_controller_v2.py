@@ -31,26 +31,14 @@ from multiprocessing import Process, Queue
 
 from kgevents import KGEventHandler as kg_events
 
-
 def send_kg_events(queue: Queue):
     while True:
         fun, args = queue.get()
         fun(**args)
-        # Process(target=fun, kwargs=args).start()
-
-
-def send_flow_mod(queue: Queue):
-    while True:
-        obj, arg = queue.get()
-        obj.send_msg(arg)
-
 
 kg_event_queue = Queue()
+#TODO: Fix
 Process(target=send_kg_events, args=(kg_event_queue,)).start()
-
-# flow_mod_queue = Queue()
-# Process(target=send_flow_mod, args=(flow_mod_queue,)).start()
-
 
 class STPControllerOFPV_1_3(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]

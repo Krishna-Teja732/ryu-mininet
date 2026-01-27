@@ -67,8 +67,8 @@ if __name__ == "__main__":
     print(f"Added {len(net.switches)} Switches")
     print(f"Added {len(net.hosts)} Hosts")
     print(f"Added {len(net.links)} Links")
-    print(f"Sleep for 90 seconds. Wait for flood rules to be added to the switches")
-    sleep(90)
+    print(f"Press any key to start Arping")
+    input()
 
     print("Sending gratuitous arp for each host")
     for host in net.hosts:
