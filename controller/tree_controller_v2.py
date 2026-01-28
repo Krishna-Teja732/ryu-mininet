@@ -1,5 +1,3 @@
-from collections import deque
-from multiprocessing import Process, Queue
 from os_ken.base.app_manager import OSKenApp
 from os_ken.controller import ofp_event
 from os_ken.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
@@ -9,16 +7,23 @@ from os_ken.lib.packet.packet import Packet
 from os_ken.lib.packet.ethernet import ethernet
 from os_ken.topology import event as topology_events
 from os_ken.topology.switches import Port, Switch, Link, Host
-
+from kgevents import KGEventHandler as kg_events
+from dataclasses import dataclass, field
 import resource
+
+
 soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 print(f"Resource Limits for open files(soft, hard): {resource.getrlimit(resource.RLIMIT_NOFILE)}")
 
-from kgevents import KGEventHandler as kg_events
 
 class TreeControllerV2(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+
+    @dataclass(order=True)
+    class OutputPort:
+        flow_count: int
+        number: int = field(compare=False)
 
     def __init__(self, *args, **kwargs):
         super(TreeControllerV2, self).__init__(*args, **kwargs)
@@ -30,7 +35,7 @@ class TreeControllerV2(OSKenApp):
         #           [<port_num>], 
         #       ],
         #} 
-        self.all_switch_mac_table: dict[int, dict[str, deque[int]]]= dict()
+        self.all_switch_mac_table: dict[int, dict[str, list[TreeControllerV2.OutputPort]]]= dict()
         # Format
         # [<dpid>] : {
         #       [<dst_addr>]: {
@@ -39,6 +44,14 @@ class TreeControllerV2(OSKenApp):
         #       }, 
         #} 
         self.all_switch_ports: dict[int, dict[str, set[int]]]= dict()
+
+        # Format
+        # [<dpid>] : {
+        #       [<port_number>]: OutputPort,
+        #       [<port_number>]: OutputPort,
+        #} 
+        self.port_to_obj: dict[int, dict[int, TreeControllerV2.OutputPort]]= dict()
+
 
 
     def __add_flow(self, datapath, priority, match, actions):
@@ -119,6 +132,9 @@ class TreeControllerV2(OSKenApp):
         if datapath.id not in self.all_switch_mac_table:
             self.all_switch_mac_table[datapath.id] = dict()
             self.all_switch_ports[datapath.id] = dict()
+            self.port_to_obj[datapath.id] = dict()
+            for port_num in range(1, self.branch_factor + 1):
+                self.port_to_obj[datapath.id][port_num] = TreeControllerV2.OutputPort(0, port_num)
 
         self.__init_default_flow_rule(datapath, ofp, ofp_parser)
         self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
@@ -169,13 +185,12 @@ class TreeControllerV2(OSKenApp):
             print("WARN: switch not initialized")
             return
         if eth_src not in forward_table:
-            forward_table[eth_src] = deque()
+            forward_table[eth_src] = list()
             port_table[eth_src] = set()
         if in_port not in port_table[eth_src]:
             port_table[eth_src].add(in_port)
-            forward_table[eth_src].append(in_port)
+            forward_table[eth_src].append(self.port_to_obj[datapath.id][in_port])
             print(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
-
 
         # No action is performed for broadcast packets. 
         # Flow rules for broadcast packets are already installed
@@ -187,10 +202,20 @@ class TreeControllerV2(OSKenApp):
             print(f"WARN: {eth_dst} not reachable through switch {datapath.id}")
             return
 
-        port_number = forward_table[eth_dst][0]
-        forward_table[eth_dst].rotate()
 
-        actions = [ofp_parser.OFPActionOutput(port_number)]
+        # Select port (Using something like a priority queue does not 
+        # work because updating the key of an object inside the priority 
+        # queue does not reorder the queue)
+        output_port = forward_table[eth_dst][0]
+        for port in forward_table[eth_dst]:
+            if port.flow_count < output_port.flow_count:
+                output_port = port
+
+        # Increment number flows for in_port and out_port
+        self.port_to_obj[datapath.id][in_port].flow_count += 1
+        output_port.flow_count = output_port.flow_count + 1
+
+        actions = [ofp_parser.OFPActionOutput(output_port.number)]
         match = ofp_parser.OFPMatch(eth_src=eth_src,eth_dst=eth_dst)
         self.__add_flow(datapath, 5000, match, actions)
 
