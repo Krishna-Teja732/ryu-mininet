@@ -1,13 +1,22 @@
 from os_ken.base.app_manager import OSKenApp
+
 from os_ken.controller import ofp_event
 from os_ken.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
+
 from os_ken.ofproto import ofproto_v1_3
+
 from os_ken.lib.packet import ether_types
 from os_ken.lib.packet.packet import Packet
 from os_ken.lib.packet.ethernet import ethernet
-from kgevents import KGEventHandler as kg_events
-from dataclasses import dataclass, field
+
+# from os_ken.topology.switches import LLDPPacket
+
+#TODO: Replace with impl before git commit
+from kgevents import KGEventHandlerNoop as kg_events
+
 import resource
+from typing import cast
+from dataclasses import dataclass, field
 
 
 soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -15,17 +24,32 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 print(f"Resource Limits for open files(soft, hard): {resource.getrlimit(resource.RLIMIT_NOFILE)}")
 
 
-class TreeControllerV2(OSKenApp):
+@dataclass(order=True)
+class SwitchPort:
+    number: int = field(compare=False)
+    datapath_id: int = field(compare=False)
+    flow_count: int = 0 
+    # mac: str = field(compare=False)
+
+    def __eq__(self, value: object, /) -> bool:
+        if not isinstance(value, SwitchPort):
+            return False
+
+        port = cast(SwitchPort, value)
+        if port.number != self.number:
+            return False 
+        return True
+
+
+
+class TreeControllerV3(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
-    @dataclass(order=True)
-    class OutputPort:
-        flow_count: int
-        number: int = field(compare=False)
 
     def __init__(self, *args, **kwargs):
-        super(TreeControllerV2, self).__init__(*args, **kwargs)
-        self.branch_factor = 10
+        super(TreeControllerV3, self).__init__(*args, **kwargs)
+        self.branch_factor = 4
+
         # Format
         # [<dpid>] : {
         #       [<dst_addr>]: [
@@ -33,26 +57,18 @@ class TreeControllerV2(OSKenApp):
         #           [<port_num>], 
         #       ],
         #} 
-        self.all_switch_mac_table: dict[int, dict[str, list[TreeControllerV2.OutputPort]]]= dict()
-        # Format
-        # [<dpid>] : {
-        #       [<dst_addr>]: {
-        #           [<port_num>], 
-        #           [<port_num>], 
-        #       }, 
-        #} 
-        self.all_switch_ports: dict[int, dict[str, set[int]]]= dict()
+        self.dpid_mac_dst_ports: dict[int, dict[str, list[SwitchPort]]]= dict()
 
         # Format
         # [<dpid>] : {
         #       [<port_number>]: OutputPort,
         #       [<port_number>]: OutputPort,
         #} 
-        self.port_to_obj: dict[int, dict[int, TreeControllerV2.OutputPort]]= dict()
+        self.port_num_to_obj_map: dict[int, dict[int, SwitchPort]]= dict()
 
         # Format
         # dpid : {"eth_src:eth_dst": "output_port",  ...  "eth_src:eth_dst": "output_port"} 
-        self.dpid_flows: dict[int, dict[str, TreeControllerV2.OutputPort]] = dict()
+        self.dpid_flows: dict[int, dict[str, SwitchPort]] = dict()
 
 
     def __add_flow(self, datapath, priority, match, actions):
@@ -126,17 +142,23 @@ class TreeControllerV2(OSKenApp):
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
 
-        body = {"dpid": datapath.id}
+        # Add only if the datapath is not already present i.e. case where the switch reconnects.
+        # From what I've observed, the mininet switches do not discard the flow rules
+        # even if the controller goes offline. All the initialization steps need not be repeated
+        # TODO: Check if datapath disconnects when a flow rule is added
+        # TODO: Add event handler for error messages from the switch
+        if datapath.id in self.dpid_mac_dst_ports:
+            return
 
-        # Add only if the datapath is not already present i.e. case where the switch reconnects
-        if datapath.id not in self.all_switch_mac_table:
-            self.all_switch_mac_table[datapath.id] = dict()
-            self.all_switch_ports[datapath.id] = dict()
-            self.port_to_obj[datapath.id] = dict()
-            for port_num in range(1, self.branch_factor + 1):
-                self.port_to_obj[datapath.id][port_num] = TreeControllerV2.OutputPort(0, port_num)
-            self.dpid_flows[datapath.id] = dict()
-            kg_events.send_switch_enter_event(**body)
+        self.dpid_mac_dst_ports[datapath.id] = dict()
+        self.port_num_to_obj_map[datapath.id] = dict()
+
+        for port_num in range(1, self.branch_factor + 1):
+            self.port_num_to_obj_map[datapath.id][port_num] = SwitchPort(port_num, datapath.id)
+        self.dpid_flows[datapath.id] = dict()
+
+        body = {"dpid": datapath.id}
+        kg_events.send_switch_enter_event(**body)
 
         self.__init_default_flow_rule(datapath, ofp, ofp_parser)
         self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
@@ -181,18 +203,15 @@ class TreeControllerV2(OSKenApp):
         eth_src = eth_headers.src
         eth_dst = eth_headers.dst
 
-        forward_table = self.all_switch_mac_table.get(datapath.id)
-        port_table = self.all_switch_ports.get(datapath.id)
-        if forward_table is None or port_table is None:
-            print("WARN: switch not initialized")
+        forward_table = self.dpid_mac_dst_ports.get(datapath.id)
+        if forward_table is None:
+            self.logger.warning("WARN: switch datastructures not initialized")
             return
         if eth_src not in forward_table:
             forward_table[eth_src] = list()
-            port_table[eth_src] = set()
-        if in_port not in port_table[eth_src]:
-            port_table[eth_src].add(in_port)
-            forward_table[eth_src].append(self.port_to_obj[datapath.id][in_port])
-            print(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
+        if self.port_num_to_obj_map[datapath.id][in_port] not in forward_table[eth_src]:
+            forward_table[eth_src].append(self.port_num_to_obj_map[datapath.id][in_port])
+            self.logger.debug(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
 
         # No action is performed for broadcast packets. 
         # Flow rules for broadcast packets are already installed
@@ -201,13 +220,13 @@ class TreeControllerV2(OSKenApp):
             return
 
         if eth_dst not in forward_table or len(forward_table[eth_dst]) == 0:
-            print(f"WARN: {eth_dst} not reachable through switch {datapath.id}")
+            self.logger.warning(f"WARN: {eth_dst} not reachable through switch {datapath.id}")
             return
 
 
         flow = f"{eth_src}:{eth_dst}"
         if flow not in self.dpid_flows[datapath.id]:
-            # Select port (Using something like a priority queue does not 
+            # Select port (Using data structures like priority queue does not 
             # work because updating the key of an object inside the priority 
             # queue does not reorder the queue)
             output_port = forward_table[eth_dst][0]
@@ -216,7 +235,7 @@ class TreeControllerV2(OSKenApp):
                     output_port = port
 
             # Increment number flows for in_port and out_port
-            self.port_to_obj[datapath.id][in_port].flow_count += 1
+            self.port_num_to_obj_map[datapath.id][in_port].flow_count += 1
             output_port.flow_count = output_port.flow_count + 1
 
             self.dpid_flows[datapath.id][flow] = output_port
