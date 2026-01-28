@@ -52,6 +52,10 @@ class TreeControllerV2(OSKenApp):
         #} 
         self.port_to_obj: dict[int, dict[int, TreeControllerV2.OutputPort]]= dict()
 
+        # Format
+        # dpid : {"eth_src:eth_dst": "output_port",  ...  "eth_src:eth_dst": "output_port"} 
+        self.dpid_flows: dict[int, dict[str, TreeControllerV2.OutputPort]] = dict()
+
 
 
     def __add_flow(self, datapath, priority, match, actions):
@@ -133,6 +137,7 @@ class TreeControllerV2(OSKenApp):
             self.all_switch_mac_table[datapath.id] = dict()
             self.all_switch_ports[datapath.id] = dict()
             self.port_to_obj[datapath.id] = dict()
+            self.dpid_flows[datapath.id] = dict()
             for port_num in range(1, self.branch_factor + 1):
                 self.port_to_obj[datapath.id][port_num] = TreeControllerV2.OutputPort(0, port_num)
 
@@ -203,21 +208,29 @@ class TreeControllerV2(OSKenApp):
             return
 
 
-        # Select port (Using something like a priority queue does not 
-        # work because updating the key of an object inside the priority 
-        # queue does not reorder the queue)
-        output_port = forward_table[eth_dst][0]
-        for port in forward_table[eth_dst]:
-            if port.flow_count < output_port.flow_count:
-                output_port = port
+        flow = f"{eth_src}:{eth_dst}"
+        if flow not in self.dpid_flows[datapath.id]:
+            # Select port (Using something like a priority queue does not 
+            # work because updating the key of an object inside the priority 
+            # queue does not reorder the queue)
+            output_port = forward_table[eth_dst][0]
+            for port in forward_table[eth_dst]:
+                if port.flow_count < output_port.flow_count:
+                    output_port = port
 
-        # Increment number flows for in_port and out_port
-        self.port_to_obj[datapath.id][in_port].flow_count += 1
-        output_port.flow_count = output_port.flow_count + 1
+            # Increment number flows for in_port and out_port
+            self.port_to_obj[datapath.id][in_port].flow_count += 1
+            output_port.flow_count = output_port.flow_count + 1
+
+            self.dpid_flows[datapath.id][flow] = output_port
+
+            actions = [ofp_parser.OFPActionOutput(output_port.number)]
+            match = ofp_parser.OFPMatch(eth_src=eth_src,eth_dst=eth_dst)
+            self.__add_flow(datapath, 5000, match, actions)
+        else: 
+            output_port = self.dpid_flows[datapath.id][flow]
 
         actions = [ofp_parser.OFPActionOutput(output_port.number)]
-        match = ofp_parser.OFPMatch(eth_src=eth_src,eth_dst=eth_dst)
-        self.__add_flow(datapath, 5000, match, actions)
 
         # Need to send the data packet back to switch
         # Switch does not buffer the data packets
