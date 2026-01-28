@@ -3,4 +3,5 @@
 
 # osken-manager ./controller/stp_controller.py --observe-links --ofp-tcp-listen-port 10001 
 # osken-manager --log-file debug.log ./controller/tree_controller.py --observe-links --ofp-tcp-listen-port 10001 
-osken-manager --log-file debug.log ./controller/tree_controller_v2.py --observe-links --ofp-tcp-listen-port 10001 
+# osken-manager --log-file debug.log ./controller/tree_controller_v2.py --observe-links --ofp-tcp-listen-port 10001 
+osken-manager --log-file debug.log ./controller/tree_controller_v3.py --observe-links --ofp-tcp-listen-port 10001 
