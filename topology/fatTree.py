@@ -1,5 +1,5 @@
 from time import sleep
-from mininet.node import RemoteController
+from mininet.node import OVSSwitch, RemoteController
 from mininet.topo import Topo
 from mininet.net import Mininet
 from mininet.cli import CLI
@@ -62,8 +62,17 @@ topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
 
 
 if __name__ == "__main__":
-    net = Mininet(topo=FatTreeTopo(10), waitConnected=True, autoSetMacs=True ,controller=RemoteController('c1', port=10001))
+    net = Mininet(topo=FatTreeTopo(10), waitConnected=True, autoSetMacs=True ,controller=RemoteController('controller', port=10001))
     net.start()
+
+    # Deactivate the inactivity probes from the switches
+    # Since Ryu controller is slow, this causes conn_reset or broken_pipe 
+    # error in the ryu controller
+    switch:OVSSwitch = net.switches[0]
+    for switch in net.switches:
+        for controller_uuid in switch.controllerUUIDs():
+            switch.vsctl('set', 'Controller', controller_uuid, 'inactivity_probe=0')
+
     print(f"Added {len(net.switches)} Switches")
     print(f"Added {len(net.hosts)} Hosts")
     print(f"Added {len(net.links)} Links")

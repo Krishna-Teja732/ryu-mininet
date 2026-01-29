@@ -8,8 +8,7 @@ from os_ken.lib.packet.packet import Packet
 from os_ken.lib.packet.ethernet import ethernet
 from os_ken.topology.switches import LLDPPacket
 
-# TODO: Replace with KGEventHandler
-from kgevents import KGEventHandlerNoop as kg_events
+from kgevents import KGEventHandler as kg_events
 
 import resource
 from enum import Enum
@@ -93,15 +92,20 @@ class TreeControllerV3(OSKenApp):
             flags=ofproto_v1_3.OFPFF_SEND_FLOW_REM,
         )
 
-        formatted_match = dict()
-        for _, match_headers in mod.match.stringify_attrs():
-            formatted_match.update(match_headers)
+        # os_ken.controller.controller.Datapath.send_msg(msg)
+        # Returns true if the message was added to the send queue, else it returns false
+        message_queued = datapath.send_msg(mod)
 
-        formatted_inst = list()
-        for instruction in mod.instructions:
-            formatted_inst.append(instruction.to_jsondict())
+        # Send flow add only if the message was queued
+        if message_queued:
+            formatted_match = dict()
+            for _, match_headers in mod.match.stringify_attrs():
+                formatted_match.update(match_headers)
 
-        body = {
+            formatted_inst = list()
+            for instruction in mod.instructions:
+                formatted_inst.append(instruction.to_jsondict())
+            body = {
                     "dpid": datapath.id,
                     "table_id": mod.table_id,
                     "request_body": {
@@ -110,11 +114,9 @@ class TreeControllerV3(OSKenApp):
                         "instructions": formatted_inst,
                     }
                 }
-        kg_events.send_flow_add_event(**body)
+            kg_events.send_flow_add_event(**body)
 
-        # os_ken.controller.controller.Datapath.send_msg(msg)
-        # Returns true if the message was added to the send queue, else it returns false
-        return datapath.send_msg(mod)
+        return message_queued 
 
 
     def __init_default_flow_rules(self, datapath, ofp, ofp_parser):
