@@ -1,20 +1,18 @@
 from os_ken.base.app_manager import OSKenApp
-
 from os_ken.controller import ofp_event
 from os_ken.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, set_ev_cls
-
 from os_ken.ofproto import ofproto_v1_3
 
 from os_ken.lib.packet import ether_types
 from os_ken.lib.packet.packet import Packet
 from os_ken.lib.packet.ethernet import ethernet
+from os_ken.topology.switches import LLDPPacket
 
-# from os_ken.topology.switches import LLDPPacket
-
-#TODO: Replace with impl before git commit
+# TODO: Replace with KGEventHandler
 from kgevents import KGEventHandlerNoop as kg_events
 
 import resource
+from enum import Enum
 from typing import cast
 from dataclasses import dataclass, field
 
@@ -24,22 +22,27 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 print(f"Resource Limits for open files(soft, hard): {resource.getrlimit(resource.RLIMIT_NOFILE)}")
 
 
-@dataclass(order=True)
+class PeerType(Enum):
+    HOST = 0
+    SWITCH = 1
+
+
+@dataclass
 class SwitchPort:
-    number: int = field(compare=False)
-    datapath_id: int = field(compare=False)
+    mac: str
+    number: int
+    datapath_id: int
+    peer_type: PeerType = field(default=PeerType.HOST)
     flow_count: int = 0 
-    # mac: str = field(compare=False)
 
     def __eq__(self, value: object, /) -> bool:
         if not isinstance(value, SwitchPort):
             return False
 
         port = cast(SwitchPort, value)
-        if port.number != self.number:
+        if port.mac != self.mac:
             return False 
         return True
-
 
 
 class TreeControllerV3(OSKenApp):
@@ -48,7 +51,7 @@ class TreeControllerV3(OSKenApp):
 
     def __init__(self, *args, **kwargs):
         super(TreeControllerV3, self).__init__(*args, **kwargs)
-        self.branch_factor = 4
+        self.branch_factor = 10
 
         # Format
         # [<dpid>] : {
@@ -69,6 +72,12 @@ class TreeControllerV3(OSKenApp):
         # Format
         # dpid : {"eth_src:eth_dst": "output_port",  ...  "eth_src:eth_dst": "output_port"} 
         self.dpid_flows: dict[int, dict[str, SwitchPort]] = dict()
+
+        # All mac address of hosts
+        self.host_mac_set: set[str] = set()
+
+        # Set of all dpid that are initialized
+        self.dpid_initialized: set[int] = set()
 
 
     def __add_flow(self, datapath, priority, match, actions):
@@ -106,13 +115,17 @@ class TreeControllerV3(OSKenApp):
         datapath.send_msg(mod)
 
 
-    def __init_default_flow_rule(self, datapath, ofp, ofp_parser):
+    def __init_default_flow_rules(self, datapath, ofp, ofp_parser):
         match = ofp_parser.OFPMatch()
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER)]
         self.__add_flow(datapath, 0, match, actions)
 
         match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6)
         self.__add_flow(datapath, 65535, match, [])
+
+        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_LLDP)
+        actions = [ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER, ofp.OFPCML_NO_BUFFER)]
+        self.__add_flow(datapath, 65535, match, actions)
 
 
     def __init_flood_flow_rules(self, datapath, ofp, ofp_parser):
@@ -147,28 +160,55 @@ class TreeControllerV3(OSKenApp):
         # even if the controller goes offline. All the initialization steps need not be repeated
         # TODO: Check if datapath disconnects when a flow rule is added
         # TODO: Add event handler for error messages from the switch
-        if datapath.id in self.dpid_mac_dst_ports:
+        if datapath.id in self.dpid_initialized:
             return
 
         self.dpid_mac_dst_ports[datapath.id] = dict()
         self.port_num_to_obj_map[datapath.id] = dict()
-
-        for port_num in range(1, self.branch_factor + 1):
-            self.port_num_to_obj_map[datapath.id][port_num] = SwitchPort(port_num, datapath.id)
         self.dpid_flows[datapath.id] = dict()
 
         body = {"dpid": datapath.id}
         kg_events.send_switch_enter_event(**body)
 
-        self.__init_default_flow_rule(datapath, ofp, ofp_parser)
+        self.__init_default_flow_rules(datapath, ofp, ofp_parser)
         self.__init_flood_flow_rules(datapath, ofp, ofp_parser)
+
+
+    @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, CONFIG_DISPATCHER)
+    def store_port_desc_stats(self, ev):
+        datapath = ev.msg.datapath
+        ofp = datapath.ofproto
+        ofp_parser = datapath.ofproto_parser
+
+        # The ofp_handler.py sends a port description request when switch connects,
+        # If the switch is already initialized, do not send LLDP 
+        # packets through them
+        if datapath.id in self.dpid_initialized:
+            return
+
+        # Send an LLDP packet on each port of the switch
+        for port in ev.msg.body:
+            # Skip the controller port
+            if port.port_no == (ofp.OFPP_CONTROLLER + 1) or port.port_no == ofp.OFPP_CONTROLLER:
+                continue
+
+            self.port_num_to_obj_map[datapath.id][port.port_no] = SwitchPort(port.hw_addr, port.port_no, datapath.id)
+
+            lldp_packet = LLDPPacket.lldp_packet(datapath.id, port.port_no, port.hw_addr, 0)
+            actions = [ofp_parser.OFPActionOutput(port.port_no)]
+            out = ofp_parser.OFPPacketOut(
+                datapath=datapath, in_port=ofp.OFPP_CONTROLLER,
+                buffer_id=ofp.OFP_NO_BUFFER, actions=actions,
+                data=lldp_packet)
+            datapath.send_msg(out)
+
+        self.dpid_initialized.add(datapath.id)
 
 
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removed_handler(self, ev):
         msg = ev.msg
         datapath = msg.datapath
-        ofp = datapath.ofproto
 
         formatted_match = dict()
         for _, match_headers in msg.match.stringify_attrs():
@@ -188,8 +228,8 @@ class TreeControllerV3(OSKenApp):
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         msg = ev.msg
-        in_port = msg.match["in_port"]
         datapath = msg.datapath
+        switch_in_port = self.port_num_to_obj_map[datapath.id][msg.match["in_port"]]
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
 
@@ -199,7 +239,11 @@ class TreeControllerV3(OSKenApp):
 
         eth_headers = Packet(msg.data).get_protocol(ethernet)
         if eth_headers.ethertype == ether_types.ETH_TYPE_LLDP:
+            src_dpid, src_port = LLDPPacket.lldp_parse(msg.data)
+            self._link_add_handler(src_dpid, src_port, datapath.id, switch_in_port.number)
+            switch_in_port.peer_type = PeerType.SWITCH
             return
+
         eth_src = eth_headers.src
         eth_dst = eth_headers.dst
 
@@ -209,14 +253,18 @@ class TreeControllerV3(OSKenApp):
             return
         if eth_src not in forward_table:
             forward_table[eth_src] = list()
-        if self.port_num_to_obj_map[datapath.id][in_port] not in forward_table[eth_src]:
-            forward_table[eth_src].append(self.port_num_to_obj_map[datapath.id][in_port])
-            self.logger.debug(f"{eth_src} reachable through switch {datapath.id} port {in_port}")
+        if switch_in_port not in forward_table[eth_src]:
+            forward_table[eth_src].append(switch_in_port)
+            self.logger.debug(f"{eth_src} reachable through switch {datapath.id} port {switch_in_port}")
+
+        if switch_in_port.peer_type == PeerType.HOST and eth_src not in self.host_mac_set:
+            self.host_mac_set.add(eth_src)
+            self._host_add_handler(eth_src, datapath.id, switch_in_port.number)
 
         # No action is performed for broadcast packets. 
         # Flow rules for broadcast packets are already installed
         # These packets are used to only learn the port of src_ip
-        if eth_headers.dst == "ff:ff:ff:ff:ff:ff":
+        if eth_dst == "ff:ff:ff:ff:ff:ff":
             return
 
         if eth_dst not in forward_table or len(forward_table[eth_dst]) == 0:
@@ -235,7 +283,7 @@ class TreeControllerV3(OSKenApp):
                     output_port = port
 
             # Increment number flows for in_port and out_port
-            self.port_num_to_obj_map[datapath.id][in_port].flow_count += 1
+            switch_in_port.flow_count += 1
             output_port.flow_count = output_port.flow_count + 1
 
             self.dpid_flows[datapath.id][flow] = output_port
@@ -253,57 +301,28 @@ class TreeControllerV3(OSKenApp):
         out = ofp_parser.OFPPacketOut(
             datapath=datapath,
             buffer_id=msg.buffer_id,
-            in_port=in_port,
+            in_port=switch_in_port.number,
             actions=actions,
             data=data,
         )
         datapath.send_msg(out)
 
 
-    # @set_ev_cls(topology_events.EventSwitchLeave, MAIN_DISPATCHER)
-    # def _switch_leave_handler(self, ev):
-    #     datapath = ev.switch.dp
-    #     body = {"dpid": datapath.id}
-    #     kg_events.send_switch_leave_event(**body)
-    #
-    #
-    # @set_ev_cls(topology_events.EventHostAdd, MAIN_DISPATCHER)
-    # def _host_add_handler(self, ev):
-    #     host: Host = ev.host
-    #     body = {
-    #                 "request_body": {
-    #                     "mac": host.mac,
-    #                     "port": {"dpid": host.port.dpid, "port_no": host.port.port_no},
-    #                 }
-    #             }
-    #     kg_events.send_host_add_event(**body)
-    #
-    #
-    # @set_ev_cls(topology_events.EventHostMove, MAIN_DISPATCHER)
-    # def _host_move_handler(self, ev):
-    #     host: Host = ev.host
-    #     self.logger.info(f"Host Move: {host}")
-    #
-    #
-    # @set_ev_cls(topology_events.EventLinkAdd, MAIN_DISPATCHER)
-    # def _link_add_handler(self, ev):
-    #     link: Link = ev.link
-    #     body = {
-    #                 "request_body": {
-    #                     "src": {"dpid": link.src.dpid, "port_no": link.src.port_no},
-    #                     "dst": {"dpid": link.dst.dpid, "port_no": link.dst.port_no},
-    #                 }
-    #             }
-    #     kg_events.send_link_add_event(**body)
-    #
-    #
-    # @set_ev_cls(topology_events.EventLinkDelete, MAIN_DISPATCHER)
-    # def _link_delete_handler(self, ev):
-    #     link: Link = ev.link
-    #     body = {
-    #                 "request_body": {
-    #                     "src": {"dpid": link.src.dpid, "port_no": link.src.port_no},
-    #                     "dst": {"dpid": link.dst.dpid, "port_no": link.dst.port_no},
-    #                 }
-    #             }
-    #     kg_events.send_link_delete_event(**body)
+    def _link_add_handler(self, src_dpid, src_port, dst_dpid, dst_port):
+        body = {
+                    "request_body": {
+                        "src": {"dpid": src_dpid, "port_no": src_port},
+                        "dst": {"dpid": dst_dpid, "port_no": dst_port},
+                    }
+                }
+        kg_events.send_link_add_event(**body)
+
+
+    def _host_add_handler(self, host_mac, datapath_id, datapath_port):
+        body = {
+                    "request_body": {
+                        "mac": host_mac,
+                        "port": {"dpid": datapath_id, "port_no": datapath_port},
+                    }
+                }
+        kg_events.send_host_add_event(**body)
