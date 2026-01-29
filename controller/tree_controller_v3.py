@@ -80,7 +80,7 @@ class TreeControllerV3(OSKenApp):
         self.dpid_initialized: set[int] = set()
 
 
-    def __add_flow(self, datapath, priority, match, actions):
+    def __add_flow(self, datapath, priority, match, actions) -> bool:
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -112,7 +112,9 @@ class TreeControllerV3(OSKenApp):
                 }
         kg_events.send_flow_add_event(**body)
 
-        datapath.send_msg(mod)
+        # os_ken.controller.controller.Datapath.send_msg(msg)
+        # Returns true if the message was added to the send queue, else it returns false
+        return datapath.send_msg(mod)
 
 
     def __init_default_flow_rules(self, datapath, ofp, ofp_parser):
@@ -282,15 +284,23 @@ class TreeControllerV3(OSKenApp):
                 if port.flow_count < output_port.flow_count:
                     output_port = port
 
-            # Increment number flows for in_port and out_port
-            switch_in_port.flow_count += 1
-            output_port.flow_count = output_port.flow_count + 1
-
-            self.dpid_flows[datapath.id][flow] = output_port
-
             actions = [ofp_parser.OFPActionOutput(output_port.number)]
             match = ofp_parser.OFPMatch(eth_src=eth_src,eth_dst=eth_dst)
-            self.__add_flow(datapath, 5000, match, actions)
+
+            # Increment the counters and store flow in controller 
+            # only if we successfully add the flow mod to the queue
+            # TODO: Even if the message was added to the queue, a error can occur 
+            # during socket.send(). In this case, all the messages in the queue are discarded. 
+            # There are no events or exceptions raised when this happens. Figure out how to handle this 
+            # Refer os_ken.controller.controller.Datapath._send_loop()
+            if self.__add_flow(datapath, 5000, match, actions):
+                # Store flow 
+                self.dpid_flows[datapath.id][flow] = output_port
+
+                # Increment number flows for in_port and out_port
+                switch_in_port.flow_count += 1
+                output_port.flow_count = output_port.flow_count + 1
+
         else: 
             output_port = self.dpid_flows[datapath.id][flow]
 
