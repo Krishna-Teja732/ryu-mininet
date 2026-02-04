@@ -261,7 +261,11 @@ class TreeControllerV3(OSKenApp):
             forward_table[eth_src].append(switch_in_port)
             self.logger.debug(f"{eth_src} reachable through switch {datapath.id} port {switch_in_port}")
 
-        if switch_in_port.peer_type == PeerType.HOST and eth_src not in self.host_mac_set:
+        # Check port number range. For k = 12, even in peer type is switch, the mac is learnt
+        # leading to incorrect topology
+        if (switch_in_port.peer_type == PeerType.HOST and 
+            switch_in_port.number > self.branch_factor // 2 and 
+            eth_src not in self.host_mac_set):
             self.host_mac_set.add(eth_src)
             self._host_add_handler(eth_src, datapath.id, switch_in_port.number)
 
