@@ -50,7 +50,7 @@ class TreeControllerV3(OSKenApp):
 
     def __init__(self, *args, **kwargs):
         super(TreeControllerV3, self).__init__(*args, **kwargs)
-        self.branch_factor = 10
+        self.branch_factor = 12
 
         # Format
         # [<dpid>] : {
@@ -184,19 +184,14 @@ class TreeControllerV3(OSKenApp):
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
 
-        # The ofp_handler.py sends a port description request when switch connects,
-        # If the switch is already initialized, do not send LLDP 
-        # packets through them
-        if datapath.id in self.dpid_initialized:
-            return
-
         # Send an LLDP packet on each port of the switch
         for port in ev.msg.body:
             # Skip the controller port
             if port.port_no == (ofp.OFPP_CONTROLLER + 1) or port.port_no == ofp.OFPP_CONTROLLER:
                 continue
 
-            self.port_num_to_obj_map[datapath.id][port.port_no] = SwitchPort(port.hw_addr, port.port_no, datapath.id)
+            if port.port_no not in self.port_num_to_obj_map[datapath.id]:
+                self.port_num_to_obj_map[datapath.id][port.port_no] = SwitchPort(port.hw_addr, port.port_no, datapath.id)
 
             lldp_packet = LLDPPacket.lldp_packet(datapath.id, port.port_no, port.hw_addr, 0)
             actions = [ofp_parser.OFPActionOutput(port.port_no)]
@@ -329,6 +324,13 @@ class TreeControllerV3(OSKenApp):
                     "request_body": {
                         "src": {"dpid": src_dpid, "port_no": src_port},
                         "dst": {"dpid": dst_dpid, "port_no": dst_port},
+                    }
+                }
+        kg_events.send_link_add_event(**body)
+        body = {
+                    "request_body": {
+                        "src": {"dpid": dst_dpid, "port_no": dst_port},
+                        "dst": {"dpid": src_dpid, "port_no": src_port},
                     }
                 }
         kg_events.send_link_add_event(**body)

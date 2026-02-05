@@ -62,7 +62,7 @@ topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
 
 
 if __name__ == "__main__":
-    net = Mininet(topo=FatTreeTopo(10), waitConnected=True, autoSetMacs=True ,controller=RemoteController('controller', port=10001))
+    net = Mininet(topo=FatTreeTopo(12), waitConnected=True, autoSetMacs=True ,controller=RemoteController('controller', port=10001))
     net.start()
 
     # Deactivate the inactivity probes from the switches
