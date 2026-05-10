@@ -3,7 +3,7 @@ import requests.adapters
 from os_ken.topology.switches import Port, Switch, Link, Host
 
 adapter = requests.adapters.HTTPAdapter(pool_maxsize=1, pool_block=True)
-url_base = "http://localhost:8080/ryu/openflow13"
+url_base = "http://localhost:8080/openflow13"
 session = requests.session()
 session.mount("http://", adapter)
 
@@ -25,19 +25,15 @@ def send_switch_leave_event(dpid):
 def send_flow_add_event(dpid, table_id, request_body):
     print(f"Flow Add: {dpid}/{table_id} flowRule: {request_body}")
     with open("event.txt", "a") as file:
-        file.write(f"post,{url_base}/{dpid}/{table_id}/flowrule,{request_body}\n")
-    print_response(
-       session.post(url=f"{url_base}/{dpid}/{table_id}/flowrule", json=request_body)
-    )
+        file.write(f"post,{url_base}/{dpid}/flowrule,{request_body}\n")
+    print_response(session.post(url=f"{url_base}/{dpid}/flowrule", json=request_body))
 
 
 def send_flow_remove_event(dpid, table_id, request_body):
     print(f"Flow remove: {dpid}/{table_id} flowRule: {request_body}")
     with open("event.txt", "a") as file:
-        file.write(f"delete,{url_base}/{dpid}/{table_id}/flowrule,{request_body}\n")
-    print_response(
-        session.delete(url=f"{url_base}/{dpid}/{table_id}/flowrule", json=request_body)
-    )
+        file.write(f"delete,{url_base}/{dpid}/flowrule,{request_body}\n")
+    print_response(session.delete(url=f"{url_base}/{dpid}/flowrule", json=request_body))
 
 
 def send_link_add_event(request_body: dict):

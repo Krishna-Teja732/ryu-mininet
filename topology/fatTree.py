@@ -15,12 +15,13 @@ from mininet.cli import CLI
 #   - Ports from [k/2 + 1, k] is connected to host
 class FatTreeTopo(Topo):
     "Fat-tree topology"
+
     def __init__(self, k, *args, **params):
         self.k = k
         super().__init__(*args, **params)
 
     def build(self):
-        k = self.k 
+        k = self.k
         num_core_switches = (k // 2) ** 2
         core_switches = []
         switch_id = 1
@@ -62,16 +63,21 @@ topos = {"FatTreeTopo": (lambda: FatTreeTopo(4))}
 
 
 if __name__ == "__main__":
-    net = Mininet(topo=FatTreeTopo(12), waitConnected=True, autoSetMacs=True ,controller=RemoteController('controller', port=10001))
+    net = Mininet(
+        topo=FatTreeTopo(10),
+        waitConnected=True,
+        autoSetMacs=True,
+        controller=RemoteController("controller", port=10001),
+    )
     net.start()
 
     # Deactivate the inactivity probes from the switches
-    # Since Ryu controller is slow, this causes conn_reset or broken_pipe 
+    # Since Ryu controller is slow, this causes conn_reset or broken_pipe
     # error in the ryu controller
-    switch:OVSSwitch = net.switches[0]
+    switch: OVSSwitch = net.switches[0]
     for switch in net.switches:
         for controller_uuid in switch.controllerUUIDs():
-            switch.vsctl('set', 'Controller', controller_uuid, 'inactivity_probe=0')
+            switch.vsctl("set", "Controller", controller_uuid, "inactivity_probe=0")
 
     print(f"Added {len(net.switches)} Switches")
     print(f"Added {len(net.hosts)} Hosts")

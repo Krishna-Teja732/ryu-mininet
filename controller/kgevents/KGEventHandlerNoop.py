@@ -2,7 +2,8 @@ import requests
 import requests.adapters
 from os_ken.topology.switches import Port, Switch, Link, Host
 
-url_base = "http://localhost:8080/ryu/openflow13"
+url_base = "http://localhost:8080/openflow13"
+
 
 def send_switch_enter_event(dpid):
     print(f"Switch Enter: {dpid}")
@@ -19,13 +20,13 @@ def send_switch_leave_event(dpid):
 def send_flow_add_event(dpid, table_id, request_body):
     print(f"Flow Add: {dpid}/{table_id} flowRule: {request_body}")
     with open("event.txt", "a") as file:
-        file.write(f"post,{url_base}/{dpid}/{table_id}/flowrule,{request_body}\n")
+        file.write(f"post,{url_base}/{dpid}/flowrule,{request_body}\n")
 
 
 def send_flow_remove_event(dpid, table_id, request_body):
     print(f"Flow remove: {dpid}/{table_id} flowRule: {request_body}")
     with open("event.txt", "a") as file:
-        file.write(f"delete,{url_base}/{dpid}/{table_id}/flowrule,{request_body}\n")
+        file.write(f"delete,{url_base}/{dpid}/flowrule,{request_body}\n")
 
 
 def send_link_add_event(request_body: dict):
