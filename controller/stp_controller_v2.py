@@ -31,14 +31,17 @@ from multiprocessing import Process, Queue
 
 from kgevents import KGEventHandler as kg_events
 
+
 def send_kg_events(queue: Queue):
     while True:
         fun, args = queue.get()
         fun(**args)
 
+
 kg_event_queue = Queue()
-#TODO: Fix
+# TODO: Fix
 Process(target=send_kg_events, args=(kg_event_queue,)).start()
+
 
 class STPControllerOFPV_1_3(OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]

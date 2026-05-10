@@ -78,6 +78,9 @@ class TreeControllerV3(OSKenApp):
         # Set of all dpid that are initialized
         self.dpid_initialized: set[int] = set()
 
+        # The flow action for corresponding flow match, this is used in flow remove
+        self.match_to_instruction: dict[str, list] = dict()
+
     def __add_flow(self, datapath, priority, match, actions) -> bool:
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -113,6 +116,7 @@ class TreeControllerV3(OSKenApp):
                     "instructions": formatted_inst,
                 },
             }
+            self.match_to_instruction[str(formatted_match)] = formatted_inst
             kg_events.send_flow_add_event(**body)
 
         return message_queued
@@ -235,6 +239,7 @@ class TreeControllerV3(OSKenApp):
             "request_body": {
                 "priority": msg.priority,
                 "oxm_fields": formatted_match,
+                "instructions": self.match_to_instruction[str(formatted_match)],
             },
         }
         kg_events.send_flow_remove_event(**body)
